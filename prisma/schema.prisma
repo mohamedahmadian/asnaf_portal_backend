@@ -1,0 +1,2887 @@
+generator client {
+  provider        = "prisma-client"
+  output          = "../src/generated/prisma"
+  moduleFormat    = "cjs"
+  previewFeatures = ["partialIndexes"]
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum UserStatus {
+  ACTIVE
+  INACTIVE
+}
+
+enum UserGender {
+  MALE
+  FEMALE
+}
+
+enum PersonType {
+  NATURAL
+  LEGAL
+}
+
+enum DocumentGender {
+  MALE
+  FEMALE
+  BOTH
+}
+
+enum ResidencyStatus {
+  RESIDENT
+  NON_RESIDENT
+}
+
+enum EducationLevel {
+  ILLITERATE
+  ELEMENTARY
+  MIDDLE_SCHOOL
+  DIPLOMA
+  ASSOCIATE
+  BACHELOR
+  MASTER
+  DOCTORATE
+  SEMINARY
+  OTHER
+}
+
+enum DocumentSource {
+  MANUAL
+  CITIZEN_SYSTEM
+  CIVIL_REGISTRY
+}
+
+enum PreviousOccupation {
+  OTHER
+  ACTIVE_MILITARY
+  RETIRED_MILITARY
+  ACTIVE_EMPLOYEE
+  RETIRED_EMPLOYEE
+}
+
+enum PremiseEstablishment {
+  INDEPENDENT
+  COMMERCIAL_COMPLEX
+  RESIDENTIAL_COMPLEX
+}
+
+enum PremiseGeoPosition {
+  MAIN_FRONTAGE
+  SIDE_FRONTAGE
+  ALLEY
+}
+
+enum PremisePublicAccess {
+  MEN
+  WOMEN
+  PUBLIC
+  SEPARATE
+}
+
+enum PremiseOwnership {
+  OWNED
+  RENTED
+}
+
+enum Religion {
+  ISLAM
+  CHRISTIANITY
+  JUDAISM
+  ZOROASTRIANISM
+  OTHER
+}
+
+enum LocationSource {
+  MANUAL
+  APP
+  STATION
+}
+
+enum ProjectImportance {
+  VERY_HIGH
+  HIGH
+  MEDIUM
+  LOW
+}
+
+enum ProjectStatus {
+  NOT_STARTED
+  IN_PROGRESS
+  SUSPENDED
+  COMPLETED
+}
+
+enum FoodReservationStatus {
+  PENDING
+  CONFIRMED
+}
+
+enum VehicleType {
+  SEDAN
+  PICKUP
+  TRUCK
+  MINIBUS
+  MOTORCYCLE
+  OTHER
+}
+
+enum VehicleStatus {
+  ACTIVE
+  IN_REPAIR
+  SCRAPPED
+  TRANSFERRED
+  MISSING
+}
+
+enum VehicleAssignmentType {
+  UNIT
+  PERSON
+}
+
+enum VehicleAssignmentStatus {
+  LENT
+  RETURNED
+}
+
+enum ProjectProgressProcessingMode {
+  IMMEDIATE
+  DEFERRED
+}
+
+enum ProjectProgressTranscriptionStatus {
+  NONE
+  PENDING
+  PROCESSING
+  READY
+  FAILED
+}
+
+model StoredImage {
+  id           String   @id @default(uuid())
+  mimeType     String
+  data         Bytes
+  byteSize     Int
+  width        Int?
+  height       Int?
+  originalName String?
+  photoUsers             User[] @relation("UserPhoto")
+  foodPhotos             Food[] @relation("FoodPhoto")
+  restaurantLogos        Restaurant[] @relation("RestaurantLogo")
+  progressImages         ProjectProgressImage[]
+  singardAttachments     SingardAttachment[]
+  boardAttachments       BoardAttachment[]
+  boardMinutesAttachments BoardMinutesAttachment[]
+  violationAttachments    ViolationAttachment[] @relation("ViolationAttachmentImage")
+  violationProceedingAttachments ViolationProceedingAttachment[] @relation("ViolationProceedingAttachmentImage")
+  letterheadLogos        CaseLetterhead[] @relation("LetterheadLogo")
+  letterheadSignatures   CaseLetterhead[] @relation("LetterheadSignature")
+  paymentReceipts        PaymentReceipt[] @relation("PaymentReceiptImage")
+  createdAt              DateTime @default(now())
+
+  @@map("stored_images")
+}
+
+model Country {
+  id        String     @id @default(uuid())
+  iso2      String     @unique
+  iso3      String?    @unique
+  phoneCode String?
+  nameFa    String
+  nameEn    String
+  isActive  Boolean    @default(true)
+  sortOrder Int        @default(0)
+  provinces Province[]
+  users     User[]
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+
+  @@index([isActive, sortOrder])
+  @@map("countries")
+}
+
+model Province {
+  id                String                @id @default(uuid())
+  countryId         String
+  country           Country               @relation(fields: [countryId], references: [id], onDelete: Restrict)
+  code              String
+  nameFa            String
+  nameEn            String
+  neshanAddress     String?
+  latitude          Decimal?              @db.Decimal(10, 7)
+  longitude         Decimal?              @db.Decimal(10, 7)
+  hasRailway        Boolean               @default(false)
+  hasAirport        Boolean               @default(false)
+  isActive          Boolean               @default(true)
+  sortOrder         Int                   @default(0)
+  cities            City[]
+  users             User[]                @relation("UserHomeProvince")
+  locatedUsers      User[]                @relation("UserLocationProvince")
+  locationHistories UserLocationHistory[] @relation("UserLocationHistoryProvince")
+  createdAt         DateTime              @default(now())
+  updatedAt         DateTime              @updatedAt
+
+  @@unique([countryId, code])
+  @@index([countryId, isActive, sortOrder])
+  @@map("provinces")
+}
+
+model City {
+  id                 String                @id @default(uuid())
+  provinceId         String
+  province           Province              @relation(fields: [provinceId], references: [id], onDelete: Restrict)
+  code               String
+  nameFa             String
+  nameEn             String
+  neshanAddress      String?
+  latitude           Decimal?              @db.Decimal(10, 7)
+  longitude          Decimal?              @db.Decimal(10, 7)
+  isProvinceCapital  Boolean               @default(false)
+  hasRailway         Boolean               @default(false)
+  hasAirport         Boolean               @default(false)
+  isActive           Boolean               @default(true)
+  sortOrder          Int                   @default(0)
+  users              User[]                @relation("UserHomeCity")
+  locatedUsers       User[]                @relation("UserLocationCity")
+  premiseCases       CaseFile[]            @relation("CasePremiseCity")
+  locationDrafts     CaseLocationDraft[]   @relation("LocationDraftCity")
+  premiseHistories   CasePremiseHistory[]  @relation("PremiseHistoryCity")
+  locationHistories  UserLocationHistory[] @relation("UserLocationHistoryCity")
+  createdAt          DateTime              @default(now())
+  updatedAt          DateTime              @updatedAt
+
+  @@unique([provinceId, code])
+  @@index([provinceId, isActive, sortOrder])
+  @@map("cities")
+}
+
+model BankAccount {
+  id            String         @id @default(uuid())
+  bankName      String
+  accountNumber String
+  cardNumber    String?        @unique
+  iban          String?        @unique
+  paymentId     String?        @unique
+  description   String?
+  isActive      Boolean        @default(true)
+  isDefault     Boolean        @default(false)
+  municipalFees MunicipalFee[]
+  financialRequestSettings FinancialRequestSetting[]
+  caseRequestFinances CaseRequestFinance[]
+  paymentGroups PaymentGroup[]
+  payments      Payment[]
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+
+  @@unique([bankName, accountNumber])
+  @@index([bankName])
+  @@index([accountNumber])
+  @@index([paymentId])
+  @@index([isActive])
+  @@index([createdAt])
+  @@map("bank_accounts")
+}
+
+model MunicipalFee {
+  id            String            @id @default(uuid())
+  title         String            @unique
+  bankAccountId String
+  bankAccount       BankAccount        @relation(fields: [bankAccountId], references: [id], onDelete: Restrict)
+  paymentGroupItems PaymentGroupItem[]
+  paymentLines      PaymentLine[]
+  caseRequestFees   CaseRequestFee[]
+  description       String?
+  isActive      Boolean           @default(true)
+  amount        Decimal           @db.Decimal(18, 0)
+  processTypes  CaseRequestType[] @default([])
+  createdAt     DateTime          @default(now())
+  updatedAt     DateTime          @updatedAt
+
+  @@index([bankAccountId])
+  @@index([title])
+  @@index([amount])
+  @@index([isActive])
+  @@index([createdAt])
+  @@map("municipal_fees")
+}
+
+model FinancialRequestSetting {
+  requestType   CaseRequestType @id
+  bankAccountId String
+  bankAccount   BankAccount     @relation(fields: [bankAccountId], references: [id], onDelete: Restrict)
+  updatedAt     DateTime        @updatedAt
+
+  @@index([bankAccountId])
+  @@map("financial_request_settings")
+}
+
+model Discount {
+  id           String            @id @default(uuid())
+  year         Int
+  title        String
+  percent      Decimal           @db.Decimal(5, 2)
+  processTypes CaseRequestType[] @default([])
+  /// اگر روشن باشد این تخفیف روی همهٔ انواع درخواست، از جمله انواعی که بعداً اضافه می‌شوند، دیده می‌شود
+  appliesToAllRequests Boolean   @default(false)
+  description  String?
+  isActive     Boolean           @default(true)
+  payments     Payment[]
+  createdAt    DateTime          @default(now())
+  updatedAt    DateTime          @updatedAt
+
+  @@unique([year, title])
+  @@index([year])
+  @@index([title])
+  @@index([isActive])
+  @@index([appliesToAllRequests])
+  @@index([createdAt])
+  @@map("discounts")
+}
+
+enum PaymentDiscountMode {
+  MANUAL
+  CATALOG
+}
+
+/// دستهٔ هزینه‌های یک حساب برای ثبت سریع پرداخت
+model PaymentGroup {
+  id            String             @id @default(uuid())
+  title         String
+  bankAccountId String
+  bankAccount   BankAccount        @relation(fields: [bankAccountId], references: [id], onDelete: Restrict)
+  isDefault     Boolean            @default(false)
+  items         PaymentGroupItem[]
+  payments      Payment[]
+  createdAt     DateTime           @default(now())
+  updatedAt     DateTime           @updatedAt
+
+  @@index([bankAccountId])
+  @@index([title])
+  @@index([createdAt])
+  @@map("payment_groups")
+}
+
+model PaymentGroupItem {
+  id             String        @id @default(uuid())
+  paymentGroupId String
+  paymentGroup   PaymentGroup  @relation(fields: [paymentGroupId], references: [id], onDelete: Cascade)
+  municipalFeeId String
+  municipalFee   MunicipalFee  @relation(fields: [municipalFeeId], references: [id], onDelete: Restrict)
+  sortOrder      Int           @default(0)
+  createdAt      DateTime      @default(now())
+
+  @@unique([paymentGroupId, municipalFeeId])
+  @@index([municipalFeeId])
+  @@index([sortOrder])
+  @@map("payment_group_items")
+}
+
+/// یک پرداخت ثبت‌شده روی پرونده، با تصویر مبلغ‌ها در همان لحظه
+model Payment {
+  id                 String              @id @default(uuid())
+  caseFileId         String?
+  caseFile           CaseFile?           @relation(fields: [caseFileId], references: [id], onDelete: Restrict)
+  payerUserId        String
+  payer              User                @relation("PaymentPayer", fields: [payerUserId], references: [id], onDelete: Restrict)
+  personType         PersonType          @default(NATURAL)
+  nationalId         String?
+  companyName        String?
+  companyNationalId  String?
+  companyRegistrationNo String?
+  payerName          String
+  recordedById       String
+  recordedBy         User                @relation("PaymentRecorder", fields: [recordedById], references: [id], onDelete: Restrict)
+  description        String?
+  paymentGroupId     String?
+  paymentGroup       PaymentGroup?       @relation(fields: [paymentGroupId], references: [id], onDelete: SetNull)
+  paymentGroupTitle  String?
+  bankAccountId      String
+  bankAccount        BankAccount         @relation(fields: [bankAccountId], references: [id], onDelete: Restrict)
+  discountMode       PaymentDiscountMode
+  discountId         String?
+  discount           Discount?           @relation(fields: [discountId], references: [id], onDelete: SetNull)
+  discountTitle      String?
+  discountPercent    Decimal?            @db.Decimal(5, 2)
+  feeCount           Int
+  subtotal           Decimal             @db.Decimal(18, 0)
+  discountAmount     Decimal             @db.Decimal(18, 0)
+  finalAmount        Decimal             @db.Decimal(18, 0)
+  method             PaymentMethod
+  status             PaymentStatus       @default(PAID)
+  /// مرجع بانکی: RRN کارت‌خوان، شمارهٔ فیش یا SaleReferenceId درگاه
+  trackingCode       String?
+  receiptNumber      String              @unique
+  caseRequestId      String?
+  caseRequest        CaseRequest?        @relation(fields: [caseRequestId], references: [id], onDelete: SetNull)
+  /// برای پرداخت آنلاین با تأیید درگاه به‌روز می‌شود
+  paidAt             DateTime            @default(now())
+  payLinkToken       String?             @unique
+  payLinkExpiresAt   DateTime?
+  payLinkSentAt      DateTime?
+  deletedAt          DateTime?
+  deletedById        String?
+  deletedBy          User?               @relation("PaymentDeleter", fields: [deletedById], references: [id], onDelete: SetNull)
+  deleteReason       String?
+  lines              PaymentLine[]
+  receipts           PaymentReceipt[]
+  gatewayTransactions PaymentGatewayTransaction[]
+  createdAt          DateTime            @default(now())
+
+  @@index([method])
+  @@index([status])
+  @@index([trackingCode])
+  @@index([caseRequestId])
+  @@index([deletedAt])
+  @@index([caseFileId])
+  @@index([payerUserId])
+  @@index([personType])
+  @@index([nationalId])
+  @@index([companyNationalId])
+  @@index([recordedById])
+  @@index([paymentGroupId])
+  @@index([bankAccountId])
+  @@index([discountId])
+  @@index([paidAt])
+  @@index([finalAmount])
+  @@index([subtotal])
+  @@index([feeCount])
+  @@index([createdAt])
+  @@map("payments")
+}
+
+model PaymentLine {
+  id             String        @id @default(uuid())
+  paymentId      String
+  payment        Payment       @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+  municipalFeeId String?
+  municipalFee   MunicipalFee? @relation(fields: [municipalFeeId], references: [id], onDelete: SetNull)
+  title          String
+  amount         Decimal       @db.Decimal(18, 0)
+  sortOrder      Int           @default(0)
+
+  @@index([paymentId])
+  @@index([municipalFeeId])
+  @@index([sortOrder])
+  @@map("payment_lines")
+}
+
+model PaymentReceipt {
+  id           String      @id @default(uuid())
+  paymentId    String
+  payment      Payment     @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+  imageId      String
+  image        StoredImage @relation("PaymentReceiptImage", fields: [imageId], references: [id], onDelete: Restrict)
+  originalName String?
+  uploadedById String
+  uploadedBy   User        @relation("PaymentReceiptUploader", fields: [uploadedById], references: [id], onDelete: Restrict)
+  createdAt    DateTime    @default(now())
+
+  @@index([paymentId, createdAt])
+  @@index([imageId])
+  @@index([uploadedById])
+  @@map("payment_receipts")
+}
+
+enum PaymentMethod {
+  ONLINE
+  POS
+  BANK_RECEIPT
+}
+
+enum PaymentStatus {
+  PENDING
+  PAID
+  FAILED
+}
+
+enum PaymentGatewayChannel {
+  OPERATOR
+  PUBLIC_LINK
+}
+
+enum PaymentGatewayStatus {
+  INITIATED
+  VERIFIED
+  SETTLED
+  FAILED
+  REVERSED
+}
+
+model PaymentGatewayTransaction {
+  id              String                @id @default(uuid())
+  paymentId       String
+  payment         Payment               @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+  gateway         String
+  channel         PaymentGatewayChannel
+  orderId         BigInt                @unique
+  amount          Decimal               @db.Decimal(18, 0)
+  status          PaymentGatewayStatus  @default(INITIATED)
+  refId           String?
+  resCode         String?
+  saleReferenceId String?
+  cardHolderPan   String?
+  rawResponse     Json?
+  createdAt       DateTime              @default(now())
+  verifiedAt      DateTime?
+  settledAt       DateTime?
+
+  @@index([paymentId, createdAt])
+  @@index([status, createdAt])
+  @@index([refId])
+  @@map("payment_gateway_transactions")
+}
+
+model JobType {
+  id          String   @id @default(uuid())
+  title       String   @unique
+  description String?
+  /// عوارض سالیانه؛ برای شغل‌هایی که عوارض جداگانه ندارند در محاسبه استفاده می‌شود
+  annualFee   Decimal? @db.Decimal(18, 0)
+  jobs        Job[]
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([title])
+  @@index([annualFee])
+  @@index([createdAt])
+  @@map("job_types")
+}
+
+model InquiryCenter {
+  id          String   @id @default(uuid())
+  name        String   @unique
+  description String?
+  phone       String?
+  officerId   String?
+  officer     User?    @relation("InquiryCenterOfficer", fields: [officerId], references: [id], onDelete: SetNull)
+  letterTitle String?
+  letterBody  String?
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  jobs        JobInquiryCenter[]
+  caseInquiries CaseInquiry[]
+  requirements InquiryRequirement[]
+  revocationOrganizations CaseRevocationOrganization[]
+
+  @@index([name])
+  @@index([phone])
+  @@index([officerId])
+  @@index([isActive])
+  @@index([createdAt])
+  @@map("inquiry_centers")
+}
+
+model JobGroup {
+  id          String   @id @default(uuid())
+  title       String   @unique
+  titleEn     String?  @unique
+  description String?
+  code        String?  @unique
+  isActive    Boolean  @default(true)
+  jobs        Job[]
+  representatives JobGroupRepresentative[]
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([title])
+  @@index([titleEn])
+  @@index([code])
+  @@index([isActive])
+  @@index([createdAt])
+  @@map("job_groups")
+}
+
+/// نمایندهٔ یک گروه شغلی؛ همان کاربر با نقش نماینده گروه وارد سامانه می‌شود
+model JobGroupRepresentative {
+  jobGroupId String
+  jobGroup   JobGroup @relation(fields: [jobGroupId], references: [id], onDelete: Cascade)
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt  DateTime @default(now())
+
+  @@id([jobGroupId, userId])
+  @@index([userId])
+  @@index([createdAt])
+  @@map("job_group_representatives")
+}
+
+model Job {
+  id          String             @id @default(uuid())
+  /// گروه شغلی؛ خالی یعنی شغل به گروهی وصل نیست
+  groupId     String?
+  group       JobGroup?          @relation(fields: [groupId], references: [id], onDelete: Restrict)
+  title       String
+  titleEn     String?
+  taxIntaCode String?  @unique
+  description String?
+  code        String
+  jobTypeId   String
+  jobType     JobType            @relation(fields: [jobTypeId], references: [id], onDelete: Restrict)
+  /// عوارض شغل؛ پیش‌فرض از نوع فعالیت می‌آید و جداگانه قابل ویرایش است
+  annualFee   Decimal? @db.Decimal(18, 0)
+  isActive    Boolean            @default(true)
+  inquiryCenters JobInquiryCenter[]
+  documents   JobDocument[]
+  documentRequirements DocumentRequirement[]
+  inquiryRequirements InquiryRequirement[]
+  identityUsers User[] @relation("UserEconomicJob")
+  activityCases CaseFile[] @relation("CaseActivityJob")
+  createdAt   DateTime           @default(now())
+  updatedAt   DateTime           @updatedAt
+
+  @@unique([groupId, code])
+  @@unique([groupId, title])
+  @@unique([groupId, titleEn])
+  @@index([groupId])
+  @@index([jobTypeId])
+  @@index([annualFee])
+  @@index([title])
+  @@index([titleEn])
+  @@index([isActive])
+  @@index([createdAt])
+  @@map("jobs")
+}
+
+model JobInquiryCenter {
+  jobId           String
+  job             Job           @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  inquiryCenterId String
+  inquiryCenter   InquiryCenter @relation(fields: [inquiryCenterId], references: [id], onDelete: Cascade)
+
+  @@id([jobId, inquiryCenterId])
+  @@index([inquiryCenterId])
+  @@map("job_inquiry_centers")
+}
+
+enum CaseInquiryStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum CaseInquiryChannel {
+  MANUAL
+  SYSTEM
+}
+
+model CaseInquiry {
+  id              String              @id @default(uuid())
+  caseFileId      String
+  caseFile        CaseFile            @relation(fields: [caseFileId], references: [id], onDelete: Cascade)
+  caseRequestId   String
+  caseRequest     CaseRequest         @relation(fields: [caseRequestId], references: [id], onDelete: Cascade)
+  inquiryCenterId String
+  inquiryCenter   InquiryCenter       @relation(fields: [inquiryCenterId], references: [id], onDelete: Restrict)
+  status          CaseInquiryStatus   @default(PENDING)
+  channel         CaseInquiryChannel?
+  note            String?
+  decidedById     String?
+  decidedBy       User?               @relation("CaseInquiryDecider", fields: [decidedById], references: [id], onDelete: SetNull)
+  decidedAt       DateTime?
+  /// زمان ارجاع همین استعلام به مرکز. خالی یعنی پرونده هنوز به مرحلهٔ استعلام نرسیده است.
+  referredAt      DateTime?
+  /// شمارهٔ نامه؛ با اولین مشاهده یا چاپ ثابت می‌ماند.
+  letterNo        String?             @unique
+  issuedAt        DateTime?
+  files           CaseInquiryFile[]
+  createdAt       DateTime            @default(now())
+  updatedAt       DateTime            @updatedAt
+
+  @@unique([caseRequestId, inquiryCenterId])
+  @@index([caseFileId])
+  @@index([caseRequestId])
+  @@index([inquiryCenterId])
+  @@index([status])
+  @@index([decidedById])
+  @@index([createdAt])
+  @@index([referredAt])
+  @@index([status, referredAt])
+  @@map("case_inquiries")
+}
+
+model CaseInquiryFile {
+  id            String      @id @default(uuid())
+  caseInquiryId String
+  caseInquiry   CaseInquiry @relation(fields: [caseInquiryId], references: [id], onDelete: Cascade)
+  storageKey    String
+  originalName  String?
+  mimeType      String
+  byteSize      Int
+  uploadedById  String?
+  uploadedBy    User?       @relation("CaseInquiryFileUploader", fields: [uploadedById], references: [id], onDelete: SetNull)
+  createdAt     DateTime    @default(now())
+
+  @@index([caseInquiryId])
+  @@index([uploadedById])
+  @@map("case_inquiry_files")
+}
+
+/// تنظیمات کلی پرونده‌ها؛ یک ردیف ثابت
+model CaseGeneralSettings {
+  id                String   @id @default("default")
+  editAfterIssuance Boolean  @default(false)
+  editorRoleId      String?
+  editorRole        Role?    @relation(fields: [editorRoleId], references: [id], onDelete: SetNull)
+  /// مدت قرارداد مجوز؛ ۱ تا ۵ سال
+  contractYears        Int      @default(1)
+  /// مدت اعتبار کارت مباشرت؛ ۱ تا ۵ سال
+  stewardContractYears Int      @default(1)
+  /// مهلت پاسخ هر مرکز استعلام، به روز. استعلام بی‌پاسخ بعد از این مدت معوق است.
+  inquiryResponseDays  Int      @default(5)
+  updatedAt         DateTime @updatedAt
+
+  @@index([editorRoleId])
+  @@map("case_general_settings")
+}
+
+/// سربرگ ثابت نامه‌های استعلام و اماکن
+model CaseLetterhead {
+  id               String       @id @default("default")
+  organizationName String?
+  address          String?
+  phone            String?
+  website          String?
+  signerName       String?
+  signerTitle      String?
+  logoId           String?      @unique
+  logo             StoredImage? @relation("LetterheadLogo", fields: [logoId], references: [id], onDelete: SetNull)
+  signatureId      String?      @unique
+  signature        StoredImage? @relation("LetterheadSignature", fields: [signatureId], references: [id], onDelete: SetNull)
+  /// شمارهٔ بعدی نامه. با هر صدور یک واحد زیاد می‌شود.
+  nextNumber       Int          @default(1)
+  /// متن پیش‌فرض نامه استعلام برای مراکزی که متن جدا ندارند؛ برای همه مشاغل یکسان است.
+  defaultLetterBody String?
+  /// اندازه پیش‌فرض چاپ نامه: A4 یا A5
+  defaultPaper      String   @default("A4")
+  updatedAt        DateTime @updatedAt
+
+  @@map("case_letterheads")
+}
+
+/// تنظیمات ثابت اداره اماکن؛ یک مسئول برای اعلام نظر روی پرونده‌ها
+model CasePlacesOffice {
+  id            String   @id @default("default")
+  phone         String?
+  officerRoleId String?  @unique
+  officerRole   Role?    @relation(fields: [officerRoleId], references: [id], onDelete: SetNull)
+  letterTitle   String?
+  letterBody    String?
+  /// مهلت پاسخ اداره اماکن، به روز. پروندهٔ بی‌پاسخ بعد از این مدت برای گزارش معوق است.
+  responseDays  Int      @default(5)
+  updatedAt     DateTime @updatedAt
+
+  @@index([officerRoleId])
+  @@map("case_places_office")
+}
+
+/// تنظیمات درخواست ابطال مجوز؛ یک ردیف ثابت
+model CaseRevocationSettings {
+  id            String                       @id @default("default")
+  /// مبلغ ثابت ابطال مجوز اقتصادی
+  fixedAmount   Decimal?                     @db.Decimal(18, 0)
+  updatedAt     DateTime                     @updatedAt
+  organizations CaseRevocationOrganization[]
+
+  @@map("case_revocation_settings")
+}
+
+/// سازمانی که هنگام ابطال مجوز باید به آن اطلاع داده شود
+model CaseRevocationOrganization {
+  id              String                 @id @default(uuid())
+  settingsId      String                 @default("default")
+  settings        CaseRevocationSettings @relation(fields: [settingsId], references: [id], onDelete: Cascade)
+  inquiryCenterId String
+  inquiryCenter   InquiryCenter          @relation(fields: [inquiryCenterId], references: [id], onDelete: Restrict)
+  letterTitle     String?
+  letterBody      String?
+  sortOrder       Int                    @default(0)
+  createdAt       DateTime               @default(now())
+  updatedAt       DateTime               @updatedAt
+
+  @@unique([settingsId, inquiryCenterId])
+  @@index([inquiryCenterId])
+  @@index([sortOrder])
+  @@map("case_revocation_organizations")
+}
+
+model CasePlacesReview {
+  id          String              @id @default(uuid())
+  caseFileId    String
+  caseFile      CaseFile            @relation(fields: [caseFileId], references: [id], onDelete: Cascade)
+  caseRequestId String              @unique
+  caseRequest   CaseRequest         @relation(fields: [caseRequestId], references: [id], onDelete: Cascade)
+  status        CaseInquiryStatus   @default(PENDING)
+  channel     CaseInquiryChannel?
+  note        String?
+  decidedById String?
+  decidedBy   User?               @relation("CasePlacesDecider", fields: [decidedById], references: [id], onDelete: SetNull)
+  decidedAt   DateTime?
+  /// زمان ورود واقعی پرونده به کارتابل اماکن. خالی یعنی هنوز ارجاع نشده است.
+  referredAt  DateTime?
+  /// شمارهٔ نامه؛ با اولین مشاهده یا چاپ ثابت می‌ماند.
+  letterNo    String?   @unique
+  issuedAt    DateTime?
+  files       CasePlacesFile[]
+  createdAt   DateTime            @default(now())
+  updatedAt   DateTime            @updatedAt
+
+  @@index([caseFileId])
+  @@index([status])
+  @@index([decidedById])
+  @@index([createdAt])
+  @@index([referredAt])
+  @@index([status, referredAt])
+  @@map("case_places_reviews")
+}
+
+model CasePlacesFile {
+  id           String           @id @default(uuid())
+  reviewId     String
+  review       CasePlacesReview @relation(fields: [reviewId], references: [id], onDelete: Cascade)
+  storageKey   String
+  originalName String?
+  mimeType     String
+  byteSize     Int
+  uploadedById String?
+  uploadedBy   User?            @relation("CasePlacesFileUploader", fields: [uploadedById], references: [id], onDelete: SetNull)
+  createdAt    DateTime         @default(now())
+
+  @@index([reviewId])
+  @@index([uploadedById])
+  @@map("case_places_files")
+}
+
+model JobDocument {
+  jobId      String
+  job        Job            @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  documentId String
+  document   Document       @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  gender     DocumentGender @default(BOTH)
+  isRequired Boolean        @default(true)
+
+  @@id([jobId, documentId])
+  @@index([documentId])
+  @@map("job_documents")
+}
+
+model Document {
+  id         String          @id @default(uuid())
+  title      String          @unique
+  /// کد پایدار مدرک سیستمی؛ اگر پر باشد حذف و تغییر کد ممنوع است
+  code       String?         @unique
+  jobs       JobDocument[]
+  requirements DocumentRequirement[]
+  personDocuments PersonDocument[]
+  caseActivityDocuments CaseActivityDocument[]
+  caseIdentityDocument CaseIdentityDocument?
+  createdAt  DateTime        @default(now())
+  updatedAt  DateTime        @updatedAt
+
+  @@index([title])
+  @@index([createdAt])
+  @@index([code])
+  @@map("documents")
+}
+
+/// مدارکی که در تب مدارک مرحلهٔ اطلاعات هویتی تشکیل پرونده نشان داده می‌شوند
+model CaseIdentityDocument {
+  documentId String         @id
+  document   Document       @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  gender     DocumentGender @default(BOTH)
+  isRequired Boolean        @default(true)
+  createdAt  DateTime       @default(now())
+
+  @@index([createdAt])
+  @@index([gender])
+  @@index([isRequired])
+  @@map("case_identity_documents")
+}
+
+/// واحد و نقشی که در مرحلهٔ تاییدهای مدیریتی باید پرونده را تایید کنند
+model CaseManagementApprover {
+  id         String   @id @default(uuid())
+  workUnitId String
+  workUnit   WorkUnit @relation(fields: [workUnitId], references: [id], onDelete: Cascade)
+  roleId     String
+  role       Role     @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  createdAt  DateTime @default(now())
+
+  @@unique([workUnitId, roleId])
+  @@index([workUnitId])
+  @@index([roleId])
+  @@index([createdAt])
+  @@map("case_management_approvers")
+}
+
+/// نقش‌هایی که در تاییدیه مدیریتی هر نوع درخواست دیده می‌شوند، با عنوان نمایشی.
+model CaseProcessManagementRole {
+  id          String          @id @default(uuid())
+  requestType CaseRequestType
+  roleId      String
+  role        Role            @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  title       String
+  createdAt   DateTime        @default(now())
+
+  @@unique([requestType, roleId])
+  @@index([requestType])
+  @@index([roleId])
+  @@index([createdAt])
+  @@map("case_process_management_roles")
+}
+
+/// نتیجهٔ تایید مدیریتی هر پرونده برای یک واحد و نقش
+model CaseManagementReview {
+  id          String              @id @default(uuid())
+  caseFileId    String
+  caseFile      CaseFile            @relation(fields: [caseFileId], references: [id], onDelete: Cascade)
+  caseRequestId String
+  caseRequest   CaseRequest         @relation(fields: [caseRequestId], references: [id], onDelete: Cascade)
+  workUnitId    String?
+  workUnit      WorkUnit?           @relation(fields: [workUnitId], references: [id], onDelete: Restrict)
+  roleId        String
+  role        Role                @relation(fields: [roleId], references: [id], onDelete: Restrict)
+  status      CaseInquiryStatus   @default(PENDING)
+  channel     CaseInquiryChannel?
+  note        String?
+  decidedById String?
+  decidedBy   User?               @relation("CaseManagementDecider", fields: [decidedById], references: [id], onDelete: SetNull)
+  decidedAt   DateTime?
+  files       CaseManagementReviewFile[]
+  createdAt   DateTime            @default(now())
+  updatedAt   DateTime            @updatedAt
+
+  @@unique([caseRequestId, roleId])
+  @@index([caseFileId])
+  @@index([caseRequestId])
+  @@index([workUnitId])
+  @@index([roleId])
+  @@index([status])
+  @@index([decidedById])
+  @@index([createdAt])
+  @@map("case_management_reviews")
+}
+
+model CaseManagementReviewFile {
+  id           String               @id @default(uuid())
+  reviewId     String
+  review       CaseManagementReview @relation(fields: [reviewId], references: [id], onDelete: Cascade)
+  storageKey   String
+  originalName String?
+  mimeType     String
+  byteSize     Int
+  uploadedById String?
+  uploadedBy   User?                @relation("CaseManagementFileUploader", fields: [uploadedById], references: [id], onDelete: SetNull)
+  createdAt    DateTime             @default(now())
+
+  @@index([reviewId])
+  @@index([uploadedById])
+  @@map("case_management_review_files")
+}
+
+enum CaseRequestType {
+  ISSUANCE
+  RENEWAL
+  LOCATION_CHANGE
+  STEWARDSHIP
+  AUCTION
+}
+
+enum CaseRequestStatus {
+  OPEN
+  ISSUED
+  COMPLETED
+  REJECTED
+  CANCELLED
+}
+
+/// وضعیت ذخیره‌شدهٔ پرونده با اولویت ابطال > تعلیق > انقضا > فعال.
+/// فقط `syncCaseStatus` (رویدادها) و جاب شبانهٔ `CaseStatusService` آن را محاسبه می‌کنند؛ ابطال با فعال‌سازی مجدد برداشته می‌شود.
+/// کارت مباشرت با انقضای مجوز میزبان هم منقضی می‌شود.
+enum CaseFileStatus {
+  ACTIVE
+  SUSPENDED
+  EXPIRED
+  REVOKED
+}
+
+enum CaseFileKind {
+  LICENSE
+  STEWARDSHIP
+}
+
+/// کسی که ابطال کارت مباشرت را درخواست کرده است
+enum CaseRevokeSource {
+  HOST
+  STEWARD
+  LICENSE
+}
+
+/// یک پروندهٔ فعالیت اقتصادی برای یک شخص و یک شغل. شخص می‌تواند چند پرونده داشته باشد.
+model CaseFile {
+  id                   String                 @id @default(uuid())
+  userId               String
+  user                 User                   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  kind                 CaseFileKind           @default(LICENSE)
+  /// پروندهٔ مجوز میزبان؛ فقط برای مباشرت
+  hostCaseFileId       String?
+  hostCaseFile         CaseFile?              @relation("StewardHost", fields: [hostCaseFileId], references: [id], onDelete: Restrict)
+  stewardCases         CaseFile[]             @relation("StewardHost")
+  status               CaseFileStatus         @default(ACTIVE)
+  revokeReason         String?
+  revokeSource         CaseRevokeSource?
+  /// لحظهٔ ثبت درخواست ابطال مباشرت
+  revokeRequestedAt    DateTime?
+  revokedAt            DateTime?
+  reactivatedAt        DateTime?
+  revokedById          String?
+  revokedBy            User?                  @relation("CaseRevocationAuthor", fields: [revokedById], references: [id], onDelete: SetNull)
+  /// شمارهٔ کارت مباشرت؛ جدا از شمارهٔ مجوز فعالیت اقتصادی
+  cardNumber           String?                @unique
+  cardIssuedAt         DateTime?              @db.Date
+  cardExpiresAt        DateTime?              @db.Date
+  /// مرحلهٔ درخواست صدور: ۰ هویت، ۱ فعالیت، ۲ محل، ۳ استعلام، ۴ اماکن، ۵ بررسی مدیریت، ۶ صدور
+  formationStep        Int                    @default(0)
+  trackingCode         String?                @unique
+  /// شمارهٔ ثابت مجوز فعالیت اقتصادی؛ با تمام شدن درخواست صدور پر می‌شود
+  licenseNumber        String?                @unique
+  licenseIssuedAt      DateTime?              @db.Date
+  licenseExpiresAt     DateTime?              @db.Date
+  businessUnitTitle    String?
+  activityJobId        String?
+  activityJob          Job?                   @relation("CaseActivityJob", fields: [activityJobId], references: [id], onDelete: SetNull)
+  previousOccupation   PreviousOccupation?
+  posDeviceCount       Int?
+  premiseCityId        String?
+  premiseCity          City?                  @relation("CasePremiseCity", fields: [premiseCityId], references: [id], onDelete: SetNull)
+  premiseEstablishment PremiseEstablishment?
+  premiseComplexId     String?
+  premiseComplex       CommercialComplex?     @relation("CasePremiseComplex", fields: [premiseComplexId], references: [id], onDelete: SetNull)
+  premiseAddress       String?
+  premiseAddressEn     String?
+  premisePlaque        String?
+  premisePlaqueSeries  String?
+  premiseFloor         String?
+  premiseUnitNo        String?
+  premisePostalCode    String?
+  premisePhone         String?
+  premiseFax           String?
+  premiseGeoPosition   PremiseGeoPosition?
+  premisePublicAccess  PremisePublicAccess?
+  registrationPlaceId  String?
+  registrationPlace    RegistrationPlace?     @relation("CaseRegistrationPlace", fields: [registrationPlaceId], references: [id], onDelete: SetNull)
+  premiseOwnership     PremiseOwnership?
+  premiseDeedNo        String?
+  premiseArea          Decimal?               @db.Decimal(12, 2)
+  leaseIssuedAt        DateTime?              @db.Date
+  leaseExpiresAt       DateTime?              @db.Date
+  leaseAgency          String?
+  premiseOwnerName     String?
+  inquiries            CaseInquiry[]
+  placesReviews        CasePlacesReview[]
+  managementReviews    CaseManagementReview[]
+  requests             CaseRequest[]
+  activityDocuments    CaseActivityDocument[]
+  premiseHistory       CasePremiseHistory[]
+  violations           Violation[]
+  suspensions          CaseSuspension[]
+  stewardRevokeFile    CaseStewardRevokeFile?
+  revocationProcess    CaseRevocationProcess?
+  payments             Payment[]
+  createdAt            DateTime               @default(now())
+  updatedAt            DateTime               @updatedAt
+
+  @@index([userId])
+  @@index([kind])
+  @@index([hostCaseFileId])
+  @@index([status])
+  @@index([revokedById])
+  @@index([formationStep])
+  @@index([activityJobId])
+  @@index([premiseCityId])
+  @@index([premiseComplexId])
+  @@index([registrationPlaceId])
+  @@index([licenseIssuedAt])
+  @@index([licenseExpiresAt])
+  @@index([createdAt])
+  @@map("case_files")
+}
+
+/// پیوست درخواست ابطال کارت مباشرت. خود فایل در File Storage است.
+model CaseStewardRevokeFile {
+  id           String   @id @default(uuid())
+  caseFileId   String   @unique
+  caseFile     CaseFile @relation(fields: [caseFileId], references: [id], onDelete: Cascade)
+  storageKey   String
+  originalName String?
+  mimeType     String
+  byteSize     Int
+  createdAt    DateTime @default(now())
+
+  @@map("case_steward_revoke_files")
+}
+
+/// فرایند سه‌مرحله‌ای ابطال مجوز اقتصادی
+model CaseRevocationProcess {
+  id               String                 @id @default(uuid())
+  caseFileId       String                 @unique
+  caseFile         CaseFile               @relation(fields: [caseFileId], references: [id], onDelete: Cascade)
+  amount           Decimal                @db.Decimal(18, 0)
+  revocationDate   DateTime?              @db.Date
+  letters          CaseRevocationLetter[]
+  createdAt        DateTime               @default(now())
+  updatedAt        DateTime               @updatedAt
+
+  @@index([createdAt])
+  @@map("case_revocation_processes")
+}
+
+/// نسخهٔ ثابت نامهٔ هر سازمان برای یک فرایند ابطال
+model CaseRevocationLetter {
+  id               String                 @id @default(uuid())
+  processId        String
+  process          CaseRevocationProcess  @relation(fields: [processId], references: [id], onDelete: Cascade)
+  inquiryCenterId  String
+  centerName       String
+  centerPhone      String?
+  letterTitle      String
+  letterBody       String
+  letterNo         String?                @unique
+  issuedAt         DateTime?              @db.Date
+  sortOrder        Int                    @default(0)
+  createdAt        DateTime               @default(now())
+  updatedAt        DateTime               @updatedAt
+
+  @@unique([processId, inquiryCenterId])
+  @@index([processId, sortOrder])
+  @@map("case_revocation_letters")
+}
+
+/// یک دوره تعلیق پرونده. با رفع تعلیق، liftedAt پر می‌شود و پرونده از حالت تعلیق خارج می‌شود.
+model CaseSuspension {
+  id          String    @id @default(uuid())
+  caseFileId  String
+  caseFile    CaseFile  @relation(fields: [caseFileId], references: [id], onDelete: Cascade)
+  reason      String
+  startsAt    DateTime  @db.Date
+  endsAt      DateTime? @db.Date
+  liftNote    String?
+  liftedAt    DateTime?
+  files       CaseSuspensionFile[]
+  createdById String?
+  createdBy   User?     @relation("CaseSuspensionAuthor", fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt   DateTime  @default(now())
+
+  @@index([caseFileId])
+  @@index([startsAt])
+  @@index([endsAt])
+  @@index([createdById])
+  @@index([createdAt])
+  @@map("case_suspensions")
+}
+
+enum CaseSuspensionFileKind {
+  SUSPEND
+  LIFT
+}
+
+/// پیوست تعلیق یا رفع تعلیق. خود فایل در File Storage است.
+model CaseSuspensionFile {
+  id           String                 @id @default(uuid())
+  suspensionId String
+  suspension   CaseSuspension         @relation(fields: [suspensionId], references: [id], onDelete: Cascade)
+  kind         CaseSuspensionFileKind
+  storageKey   String
+  originalName String?
+  mimeType     String
+  byteSize     Int
+  createdAt    DateTime               @default(now())
+
+  @@index([suspensionId])
+  @@index([kind])
+  @@map("case_suspension_files")
+}
+
+/// هر کار روی پرونده: صدور، و بعداً تمدید، مباشرت یا مجوز حراج.
+/// شمارهٔ درخواست با باز شدن درخواست زده می‌شود. شمارهٔ مجوز فعالیت اقتصادی روی پرونده ثابت می‌ماند.
+model CaseRequest {
+  id            String            @id @default(uuid())
+  caseFileId    String
+  caseFile      CaseFile          @relation(fields: [caseFileId], references: [id], onDelete: Cascade)
+  type          CaseRequestType
+  number        String            @unique
+  status        CaseRequestStatus @default(OPEN)
+  /// مرحلهٔ همین درخواست. برای صدور همان ۰ تا ۶ است. نوع‌های دیگر مرحلهٔ جدا دارند.
+  formationStep Int               @default(0)
+  completedAt   DateTime?
+  inquiries     CaseInquiry[]
+  placesReview  CasePlacesReview?
+  managementReviews CaseManagementReview[]
+  activityDocuments CaseActivityDocument[]
+  events        CaseRequestEvent[]
+  renewalTerms  CaseRenewalTerms?
+  locationDraft CaseLocationDraft?
+  replacedPremise CasePremiseHistory?
+  auction       CaseAuction?
+  payments      Payment[]
+  finance       CaseRequestFinance?
+  createdAt     DateTime          @default(now())
+  updatedAt     DateTime          @updatedAt
+
+  @@index([caseFileId])
+  @@index([type])
+  @@index([status])
+  @@index([formationStep])
+  @@index([createdAt])
+  @@map("case_requests")
+}
+
+/// حساب و هزینه‌های همین درخواست. با اولین باز شدن از تنظیمات مالی همان نوع درخواست پر می‌شود.
+model CaseRequestFinance {
+  requestId     String           @id
+  request       CaseRequest      @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  bankAccountId String
+  bankAccount   BankAccount      @relation(fields: [bankAccountId], references: [id], onDelete: Restrict)
+  fees          CaseRequestFee[]
+  createdAt     DateTime         @default(now())
+  updatedAt     DateTime         @updatedAt
+
+  @@index([bankAccountId])
+  @@map("case_request_finances")
+}
+
+/// مبلغ این هزینه برای همین درخواست؛ با تغییر مبلغ پایهٔ هزینه عوض نمی‌شود
+model CaseRequestFee {
+  id             String             @id @default(uuid())
+  requestId      String
+  finance        CaseRequestFinance @relation(fields: [requestId], references: [requestId], onDelete: Cascade)
+  municipalFeeId String
+  municipalFee   MunicipalFee       @relation(fields: [municipalFeeId], references: [id], onDelete: Restrict)
+  title          String
+  amount         Decimal            @db.Decimal(18, 0)
+  sortOrder      Int                @default(0)
+  createdAt      DateTime           @default(now())
+
+  @@unique([requestId, municipalFeeId])
+  @@index([municipalFeeId])
+  @@map("case_request_fees")
+}
+
+/// تغییر وضعیت درخواست
+model CaseRequestEvent {
+  id         String            @id @default(uuid())
+  requestId  String
+  request    CaseRequest       @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  fromStatus CaseRequestStatus?
+  toStatus   CaseRequestStatus
+  actorId    String?
+  actor      User?             @relation("CaseRequestEventActor", fields: [actorId], references: [id], onDelete: SetNull)
+  createdAt  DateTime          @default(now())
+
+  @@index([requestId])
+  @@index([actorId])
+  @@index([createdAt])
+  @@map("case_request_events")
+}
+
+/// تاریخ‌های محاسبه‌شدهٔ تمدید؛ موقع باز شدن درخواست ثابت می‌شوند
+model CaseRenewalTerms {
+  requestId          String    @id
+  request            CaseRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  currentIssuedAt    DateTime  @db.Date
+  currentExpiresAt   DateTime  @db.Date
+  nextIssuedAt       DateTime  @db.Date
+  nextExpiresAt      DateTime  @db.Date
+  /// روزهای گذشته از انقضای فعلی؛ صفر یعنی هنوز نگذشته
+  delayDays          Int       @default(0)
+
+  @@index([currentExpiresAt])
+  @@map("case_renewal_terms")
+}
+
+/// محل پیشنهادی تغییر مکان تا زمان تکمیل درخواست
+model CaseLocationDraft {
+  requestId            String                 @id
+  request              CaseRequest            @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  premiseCityId        String?
+  premiseCity          City?                  @relation("LocationDraftCity", fields: [premiseCityId], references: [id], onDelete: SetNull)
+  premiseEstablishment PremiseEstablishment?
+  premiseComplexId     String?
+  premiseComplex       CommercialComplex?     @relation("LocationDraftComplex", fields: [premiseComplexId], references: [id], onDelete: SetNull)
+  premiseAddress       String?
+  premiseAddressEn     String?
+  premisePlaque        String?
+  premisePlaqueSeries  String?
+  premiseFloor         String?
+  premiseUnitNo        String?
+  premisePostalCode    String?
+  premisePhone         String?
+  premiseFax           String?
+  premiseGeoPosition   PremiseGeoPosition?
+  premisePublicAccess  PremisePublicAccess?
+  registrationPlaceId  String?
+  registrationPlace    RegistrationPlace?     @relation("LocationDraftRegistration", fields: [registrationPlaceId], references: [id], onDelete: SetNull)
+  premiseOwnership     PremiseOwnership?
+  premiseDeedNo        String?
+  premiseArea          Decimal?               @db.Decimal(12, 2)
+  leaseIssuedAt        DateTime?              @db.Date
+  leaseExpiresAt       DateTime?              @db.Date
+  leaseAgency          String?
+  premiseOwnerName     String?
+  updatedAt            DateTime               @updatedAt
+
+  @@index([premiseCityId])
+  @@index([premiseComplexId])
+  @@index([registrationPlaceId])
+  @@map("case_location_drafts")
+}
+
+/// محل قبلی پرونده. قبل از نشستن آدرس جدیدِ تغییر مکان، در همان تراکنش ذخیره می‌شود.
+model CasePremiseHistory {
+  id                   String                 @id @default(uuid())
+  caseFileId           String
+  caseFile             CaseFile               @relation(fields: [caseFileId], references: [id], onDelete: Cascade)
+  replacedByRequestId  String?                @unique
+  replacedByRequest    CaseRequest?           @relation(fields: [replacedByRequestId], references: [id], onDelete: SetNull)
+  startedAt            DateTime
+  endedAt              DateTime
+  premiseCityId        String?
+  premiseCity          City?                  @relation("PremiseHistoryCity", fields: [premiseCityId], references: [id], onDelete: SetNull)
+  premiseEstablishment PremiseEstablishment?
+  premiseComplexId     String?
+  premiseComplex       CommercialComplex?     @relation("PremiseHistoryComplex", fields: [premiseComplexId], references: [id], onDelete: SetNull)
+  premiseAddress       String?
+  premiseAddressEn     String?
+  premisePlaque        String?
+  premisePlaqueSeries  String?
+  premiseFloor         String?
+  premiseUnitNo        String?
+  premisePostalCode    String?
+  premisePhone         String?
+  premiseFax           String?
+  premiseGeoPosition   PremiseGeoPosition?
+  premisePublicAccess  PremisePublicAccess?
+  registrationPlaceId  String?
+  registrationPlace    RegistrationPlace?     @relation("PremiseHistoryRegistration", fields: [registrationPlaceId], references: [id], onDelete: SetNull)
+  premiseOwnership     PremiseOwnership?
+  premiseDeedNo        String?
+  premiseArea          Decimal?               @db.Decimal(12, 2)
+  leaseIssuedAt        DateTime?              @db.Date
+  leaseExpiresAt       DateTime?              @db.Date
+  leaseAgency          String?
+  premiseOwnerName     String?
+
+  @@index([caseFileId, endedAt])
+  @@index([premiseCityId])
+  @@index([premiseComplexId])
+  @@index([registrationPlaceId])
+  @@map("case_premise_history")
+}
+
+enum AuctionApproverKind {
+  SPECIAL_INSPECTOR
+  AUCTION_COMMITTEE
+  COMMERCIAL_MANAGER
+}
+
+/// بازه، سقف تخفیف و کالاهای درخواست مجوز حراج
+model CaseAuction {
+  requestId   String   @id
+  request     CaseRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  title       String?
+  startsAt    DateTime @db.Date
+  endsAt      DateTime @db.Date
+  discountMin Decimal  @db.Decimal(5, 2)
+  discountMax Decimal  @db.Decimal(5, 2)
+  items       CaseAuctionItem[]
+  approvals   CaseAuctionApproval[]
+
+  @@index([startsAt])
+  @@index([endsAt])
+  @@map("case_auctions")
+}
+
+model CaseAuctionItem {
+  id              String      @id @default(uuid())
+  requestId       String
+  auction         CaseAuction @relation(fields: [requestId], references: [requestId], onDelete: Cascade)
+  name            String
+  price           Decimal     @db.Decimal(18, 0)
+  discountPercent Decimal     @db.Decimal(5, 2)
+  sortOrder       Int
+
+  @@index([requestId])
+  @@index([sortOrder])
+  @@map("case_auction_items")
+}
+
+model CaseAuctionApproval {
+  id          String              @id @default(uuid())
+  requestId   String
+  auction     CaseAuction         @relation(fields: [requestId], references: [requestId], onDelete: Cascade)
+  kind        AuctionApproverKind
+  status      CaseInquiryStatus   @default(PENDING)
+  note        String?
+  decidedById String?
+  decidedBy   User?               @relation("CaseAuctionDecider", fields: [decidedById], references: [id], onDelete: SetNull)
+  decidedAt   DateTime?
+  createdAt   DateTime            @default(now())
+  updatedAt   DateTime            @updatedAt
+
+  @@unique([requestId, kind])
+  @@index([requestId])
+  @@index([kind])
+  @@index([status])
+  @@index([decidedById])
+  @@map("case_auction_approvals")
+}
+
+/// مدرک لازم برای یک نوع درخواست. شغل خالی یعنی همهٔ شغل‌ها.
+model DocumentRequirement {
+  id          String           @id @default(uuid())
+  documentId  String
+  document    Document         @relation(fields: [documentId], references: [id], onDelete: Restrict)
+  requestType CaseRequestType
+  jobId       String?
+  job         Job?             @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  gender      DocumentGender   @default(BOTH)
+  isRequired  Boolean          @default(true)
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+
+  @@index([documentId])
+  @@index([requestType])
+  @@index([jobId])
+  @@map("document_requirements")
+}
+
+/// مرکز استعلام لازم برای یک نوع درخواست. شغل خالی یعنی همهٔ شغل‌ها.
+model InquiryRequirement {
+  id               String           @id @default(uuid())
+  inquiryCenterId  String
+  inquiryCenter    InquiryCenter    @relation(fields: [inquiryCenterId], references: [id], onDelete: Restrict)
+  requestType      CaseRequestType
+  jobId            String?
+  job              Job?             @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  createdAt        DateTime         @default(now())
+  updatedAt        DateTime         @updatedAt
+
+  @@index([inquiryCenterId])
+  @@index([requestType])
+  @@index([jobId])
+  @@map("inquiry_requirements")
+}
+
+model PersonDocument {
+  id         String                  @id @default(uuid())
+  userId     String
+  user       User                    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  documentId String
+  document   Document                @relation(fields: [documentId], references: [id], onDelete: Restrict)
+  versions   PersonDocumentVersion[]
+  createdAt  DateTime                @default(now())
+  updatedAt  DateTime                @updatedAt
+
+  @@unique([userId, documentId])
+  @@index([userId])
+  @@index([documentId])
+  @@map("person_documents")
+}
+
+model PersonDocumentVersion {
+  id               String          @id @default(uuid())
+  personDocumentId String
+  personDocument   PersonDocument  @relation(fields: [personDocumentId], references: [id], onDelete: Cascade)
+  version          Int
+  source           DocumentSource  @default(MANUAL)
+  storageKey       String
+  originalName     String?
+  mimeType         String
+  byteSize         Int
+  createdAt        DateTime        @default(now())
+
+  @@unique([personDocumentId, version])
+  @@index([personDocumentId])
+  @@index([storageKey])
+  @@index([createdAt])
+  @@map("person_document_versions")
+}
+
+/// مدرک شغلی یک درخواست. فایل روی پرونده می‌ماند و ارائه مال همین درخواست است.
+model CaseActivityDocument {
+  id            String                         @id @default(uuid())
+  caseFileId    String
+  caseFile      CaseFile                       @relation(fields: [caseFileId], references: [id], onDelete: Cascade)
+  caseRequestId String
+  caseRequest   CaseRequest                    @relation(fields: [caseRequestId], references: [id], onDelete: Cascade)
+  documentId    String
+  document      Document                       @relation(fields: [documentId], references: [id], onDelete: Restrict)
+  versions      CaseActivityDocumentVersion[]
+  createdAt     DateTime                       @default(now())
+  updatedAt     DateTime                       @updatedAt
+
+  @@unique([caseRequestId, documentId])
+  @@index([caseFileId])
+  @@index([caseRequestId])
+  @@index([documentId])
+  @@map("case_activity_documents")
+}
+
+model CaseActivityDocumentVersion {
+  id                     String               @id @default(uuid())
+  caseActivityDocumentId String
+  caseActivityDocument   CaseActivityDocument @relation(fields: [caseActivityDocumentId], references: [id], onDelete: Cascade)
+  version                Int
+  source                 DocumentSource       @default(MANUAL)
+  storageKey             String
+  originalName           String?
+  mimeType               String
+  byteSize               Int
+  createdAt              DateTime             @default(now())
+
+  @@unique([caseActivityDocumentId, version])
+  @@index([caseActivityDocumentId])
+  @@index([storageKey])
+  @@index([createdAt])
+  @@map("case_activity_document_versions")
+}
+
+model User {
+  id                 String                @id @default(uuid())
+  username           String                @unique
+  passwordHash       String
+  firstName          String
+  lastName           String
+  fullName           String
+  locale             String                @default("fa")
+  status             UserStatus            @default(ACTIVE)
+  nationalId         String?               @unique
+  phone              String?               @unique
+  email              String?               @unique
+  gender             UserGender?
+  personType         PersonType            @default(NATURAL)
+  companyName        String?
+  companyNationalId  String?               @unique
+  companyRegistrationNo String?
+  companyRegisteredAt DateTime?             @db.Date
+  economicCode       String?
+  address            String?
+  notes              String?
+  religion           Religion?
+  religionOther      String?
+  telegram           String?
+  bale               String?
+  eitaa              String?
+  whatsapp           String?
+  otherSocial        String?
+  vehiclePlates      String[]              @default([])
+  countryId          String?
+  country            Country?              @relation(fields: [countryId], references: [id], onDelete: SetNull)
+  provinceId         String?
+  province           Province?             @relation("UserHomeProvince", fields: [provinceId], references: [id], onDelete: SetNull)
+  cityId             String?
+  city               City?                 @relation("UserHomeCity", fields: [cityId], references: [id], onDelete: SetNull)
+  locationProvinceId String?
+  locationProvince   Province?             @relation("UserLocationProvince", fields: [locationProvinceId], references: [id], onDelete: SetNull)
+  locationCityId     String?
+  locationCity       City?                 @relation("UserLocationCity", fields: [locationCityId], references: [id], onDelete: SetNull)
+  latitude           Decimal?              @db.Decimal(10, 7)
+  longitude          Decimal?              @db.Decimal(10, 7)
+  locationNotes      String?
+  locationUpdatedAt  DateTime?
+  photoId                  String?
+  photo                    StoredImage?          @relation("UserPhoto", fields: [photoId], references: [id], onDelete: SetNull)
+  locationHistories        UserLocationHistory[]
+  orgUnitId          String?
+  orgUnit            OrganizationUnit?     @relation("UnitEmployees", fields: [orgUnitId], references: [id], onDelete: SetNull)
+  positionId         String?
+  position           OrganizationPosition? @relation(fields: [positionId], references: [id], onDelete: SetNull)
+  workUnitId         String?
+  workUnit           WorkUnit?             @relation(fields: [workUnitId], references: [id], onDelete: SetNull)
+  staffPostId        String?
+  staffPost          StaffPost?            @relation(fields: [staffPostId], references: [id], onDelete: SetNull)
+  fatherName         String?
+  lastNameEn         String?
+  birthDate          DateTime?             @db.Date
+  passportNumber     String?
+  nationalCardExpiresAt DateTime?          @db.Date
+  passportExpiresAt  DateTime?             @db.Date
+  identityCertificateNo String?
+  birthPlace         String?
+  identityIssuedIn   String?
+  residencyStatus    ResidencyStatus?
+  postalCode         String?
+  homePhone          String?
+  educationLevel     EducationLevel?
+  citizenGroup       String?
+  caseFiles          CaseFile[]
+  caseRequestEvents  CaseRequestEvent[] @relation("CaseRequestEventActor")
+  caseSuspensions    CaseSuspension[]   @relation("CaseSuspensionAuthor")
+  caseRevocations    CaseFile[]         @relation("CaseRevocationAuthor")
+  jobId              String?
+  economicJob        Job?                  @relation("UserEconomicJob", fields: [jobId], references: [id], onDelete: SetNull)
+  personDocuments    PersonDocument[]
+  nutritionUnits     OrganizationUnit[]    @relation("UnitNutritionRep")
+  inquiryCenters     InquiryCenter[]       @relation("InquiryCenterOfficer")
+  caseInquiriesDecided CaseInquiry[]       @relation("CaseInquiryDecider")
+  caseInquiryFiles   CaseInquiryFile[]     @relation("CaseInquiryFileUploader")
+  casePlacesDecided  CasePlacesReview[]    @relation("CasePlacesDecider")
+  casePlacesFiles    CasePlacesFile[]      @relation("CasePlacesFileUploader")
+  caseManagementDecided CaseManagementReview[] @relation("CaseManagementDecider")
+  caseAuctionDecided CaseAuctionApproval[] @relation("CaseAuctionDecider")
+  caseManagementReviewFiles CaseManagementReviewFile[] @relation("CaseManagementFileUploader")
+  jobGroupRepresentations JobGroupRepresentative[]
+  foodReservations   FoodReservation[]
+  vehicleAssignments VehicleAssignment[] @relation("VehicleAssignmentPerson")
+  userRoles          UserRole[]
+  singardFeedbacks   SingardFeedback[]     @relation("SingardFeedbackAuthor")
+  singardReplies     SingardFeedback[]     @relation("SingardFeedbackReplier")
+  singardActivities  SingardActivity[]
+  boardRequestsCreated    BoardRequest[] @relation("BoardRequestAuthor")
+  boardRequestsRejected   BoardRequest[] @relation("BoardRequestRejecter")
+  boardManagementReviews  BoardRequest[] @relation("BoardManagementReviewer")
+  boardLegalReviews       BoardRequest[] @relation("BoardLegalReviewer")
+  boardBudgetReviews      BoardRequest[] @relation("BoardBudgetReviewer")
+  boardSecretaryReviews   BoardRequest[] @relation("BoardSecretaryReviewer")
+  boardMinutesCreated     BoardMinutes[] @relation("BoardMinutesAuthor")
+  boardMinutesMemberships BoardMinutesMember[]
+  violationsCreated       Violation[] @relation("ViolationAuthor")
+  violationCases          Violation[] @relation("ViolationCase")
+  violationProceedingsCreated ViolationProceeding[] @relation("ViolationProceedingAuthor")
+  recordedPayments            Payment[] @relation("PaymentRecorder")
+  paymentsAsPayer             Payment[] @relation("PaymentPayer")
+  uploadedPaymentReceipts     PaymentReceipt[] @relation("PaymentReceiptUploader")
+  deletedPayments             Payment[] @relation("PaymentDeleter")
+  scheduledJobRuns            ScheduledJobRun[] @relation("ScheduledJobRunner")
+  createdAt          DateTime              @default(now())
+  updatedAt          DateTime              @updatedAt
+
+  @@index([status])
+  @@index([personType])
+  @@index([fullName])
+  @@index([createdAt])
+  @@index([countryId])
+  @@index([provinceId])
+  @@index([cityId])
+  @@index([locationProvinceId])
+  @@index([locationCityId])
+  @@index([orgUnitId])
+  @@index([positionId])
+  @@index([workUnitId])
+  @@index([staffPostId])
+  @@index([jobId])
+  @@map("users")
+}
+
+model UserLocationHistory {
+  id         String         @id @default(uuid())
+  userId     String
+  user       User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  provinceId String?
+  province   Province?      @relation("UserLocationHistoryProvince", fields: [provinceId], references: [id], onDelete: SetNull)
+  cityId     String?
+  city       City?          @relation("UserLocationHistoryCity", fields: [cityId], references: [id], onDelete: SetNull)
+  latitude   Decimal?       @db.Decimal(10, 7)
+  longitude  Decimal?       @db.Decimal(10, 7)
+  notes      String?
+  source     LocationSource @default(MANUAL)
+  createdAt  DateTime       @default(now())
+
+  @@index([userId, createdAt])
+  @@index([provinceId])
+  @@index([cityId])
+  @@map("user_location_histories")
+}
+
+model ProjectGroup {
+  id          String    @id @default(uuid())
+  name        String    @unique
+  description String?
+  color       String?
+  projects    Project[]
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([name])
+  @@index([createdAt])
+  @@map("project_groups")
+}
+
+model Project {
+  id                   String             @id @default(uuid())
+  systemName           String
+  code                 String             @unique
+  isActive             Boolean            @default(true)
+  status               ProjectStatus      @default(NOT_STARTED)
+  progressPercent      Int?
+  startDate            DateTime?          @db.Date
+  endDate              DateTime?          @db.Date
+  latitude             Decimal?           @db.Decimal(10, 7)
+  longitude            Decimal?           @db.Decimal(10, 7)
+  boundary             Json?
+  address              String?
+  companyName          String?
+  systemUrl            String?
+  launchYear           Int?
+  isSupportActive      Boolean            @default(true)
+  replacementProjectId String?
+  replacementProject   Project?           @relation("ProjectReplacement", fields: [replacementProjectId], references: [id], onDelete: SetNull)
+  replacedBy           Project[]          @relation("ProjectReplacement")
+  description          String?
+  color                String?
+  showOnLiveBoard      Boolean            @default(true)
+  showOnHomePage       Boolean            @default(true)
+  importance           ProjectImportance  @default(HIGH)
+  orgUnitId            String?
+  orgUnit              OrganizationUnit?  @relation("ProjectOrgUnit", fields: [orgUnitId], references: [id], onDelete: SetNull)
+  groupId              String?
+  group                ProjectGroup?      @relation(fields: [groupId], references: [id], onDelete: Restrict)
+  operators            ProjectOperator[]
+  contractors          ProjectContractor[]
+  contractorLinks      ProjectContractorProject[]
+  phases               ProjectPhase[]
+  progressEntries      ProjectProgressEntry[]
+  documents            ProjectDocument[]
+  createdAt            DateTime           @default(now())
+  updatedAt            DateTime           @updatedAt
+
+  @@index([systemName])
+  @@index([code])
+  @@index([isActive])
+  @@index([status])
+  @@index([startDate])
+  @@index([endDate])
+  @@index([isSupportActive])
+  @@index([showOnLiveBoard])
+  @@index([showOnHomePage])
+  @@index([importance])
+  @@index([orgUnitId])
+  @@index([groupId])
+  @@index([createdAt])
+  @@map("projects")
+}
+
+model ProjectDocument {
+  id           String   @id @default(uuid())
+  projectId    String
+  project      Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  title        String
+  description  String?
+  originalName String
+  mimeType     String
+  byteSize     Int
+  storageKey   String
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([projectId, createdAt])
+  @@index([title])
+  @@map("project_documents")
+}
+
+model ProjectOperator {
+  projectId          String
+  organizationUnitId String
+  project            Project          @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  organizationUnit   OrganizationUnit @relation(fields: [organizationUnitId], references: [id], onDelete: Restrict)
+  createdAt          DateTime         @default(now())
+
+  @@id([projectId, organizationUnitId])
+  @@index([organizationUnitId])
+  @@map("project_operators")
+}
+
+model ProjectPhase {
+  id              String         @id @default(uuid())
+  projectId       String
+  project         Project        @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  name            String
+  startDate       DateTime?      @db.Date
+  endDate         DateTime?      @db.Date
+  status          ProjectStatus?
+  progressPercent Int?
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  @@index([projectId, name])
+  @@index([projectId, startDate])
+  @@index([status])
+  @@index([createdAt])
+  @@map("project_phases")
+}
+
+model StoredFile {
+  id           String                 @id @default(uuid())
+  mimeType     String
+  data         Bytes
+  byteSize     Int
+  originalName String?
+  durationMs   Int?
+  createdAt    DateTime               @default(now())
+  progressEntries ProjectProgressEntry[]
+  singardAttachments SingardAttachment[]
+  boardAttachments   BoardAttachment[]
+  boardMinutesAttachments BoardMinutesAttachment[]
+  violationAttachments ViolationAttachment[] @relation("ViolationAttachmentFile")
+  violationProceedingAttachments ViolationProceedingAttachment[] @relation("ViolationProceedingAttachmentFile")
+
+  @@map("stored_files")
+}
+
+model ProjectProgressEntry {
+  id                  String                              @id @default(uuid())
+  projectId           String
+  project             Project                             @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  occurredAt          DateTime                            @db.Date
+  body                String?
+  transcript          String?
+  summary             String?
+  progressPercent     Int?
+  processingMode      ProjectProgressProcessingMode       @default(DEFERRED)
+  transcriptionStatus ProjectProgressTranscriptionStatus  @default(NONE)
+  transcriptionError  String?
+  audioId             String?
+  audio               StoredFile?                         @relation(fields: [audioId], references: [id], onDelete: SetNull)
+  images              ProjectProgressImage[]
+  createdAt           DateTime                            @default(now())
+  updatedAt           DateTime                            @updatedAt
+
+  @@index([projectId, occurredAt])
+  @@index([projectId, createdAt])
+  @@index([transcriptionStatus])
+  @@index([audioId])
+  @@map("project_progress_entries")
+}
+
+model ProjectProgressImage {
+  id        String               @id @default(uuid())
+  entryId   String
+  entry     ProjectProgressEntry @relation(fields: [entryId], references: [id], onDelete: Cascade)
+  imageId   String
+  image     StoredImage          @relation(fields: [imageId], references: [id], onDelete: Restrict)
+  sortOrder Int                  @default(0)
+  createdAt DateTime             @default(now())
+
+  @@index([entryId, sortOrder])
+  @@index([imageId])
+  @@map("project_progress_images")
+}
+
+model ProjectContractor {
+  id           String   @id @default(uuid())
+  projectId    String
+  project      Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  name         String
+  nationalId   String?
+  description  String?
+  ceoName      String?
+  timeEstimate String?
+  costEstimate Decimal? @db.Decimal(18, 0)
+  members      ProjectContractorMember[]
+  phases       ProjectContractorPhase[]
+  payments     ProjectContractorPayment[]
+  projectLinks ProjectContractorProject[]
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([projectId, name])
+  @@index([nationalId])
+  @@index([createdAt])
+  @@map("project_contractors")
+}
+
+model ProjectContractorProject {
+  id           String            @id @default(uuid())
+  contractorId String
+  contractor   ProjectContractor @relation(fields: [contractorId], references: [id], onDelete: Cascade)
+  projectId    String
+  project      Project           @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  createdAt    DateTime          @default(now())
+  updatedAt    DateTime          @updatedAt
+
+  @@unique([contractorId, projectId])
+  @@index([contractorId])
+  @@index([projectId])
+  @@index([createdAt])
+  @@map("project_contractor_projects")
+}
+
+model ProjectContractorMember {
+  id           String            @id @default(uuid())
+  contractorId String
+  contractor   ProjectContractor @relation(fields: [contractorId], references: [id], onDelete: Cascade)
+  firstName    String
+  lastName     String
+  phone        String?
+  role         String?
+  description  String?
+  createdAt    DateTime          @default(now())
+  updatedAt    DateTime          @updatedAt
+
+  @@index([contractorId])
+  @@index([lastName, firstName])
+  @@map("project_contractor_members")
+}
+
+model ProjectContractorPhase {
+  id           String            @id @default(uuid())
+  contractorId String
+  contractor   ProjectContractor @relation(fields: [contractorId], references: [id], onDelete: Cascade)
+  name         String
+  startDate    DateTime          @db.Date
+  endDate      DateTime          @db.Date
+  goals        String?
+  createdAt    DateTime          @default(now())
+  updatedAt    DateTime          @updatedAt
+
+  @@index([contractorId, startDate])
+  @@map("project_contractor_phases")
+}
+
+model ProjectContractorPayment {
+  id           String            @id @default(uuid())
+  contractorId String
+  contractor   ProjectContractor @relation(fields: [contractorId], references: [id], onDelete: Cascade)
+  paidAt       DateTime          @db.Date
+  amount       Decimal           @db.Decimal(18, 0)
+  description  String?
+  createdAt    DateTime          @default(now())
+  updatedAt    DateTime          @updatedAt
+
+  @@index([contractorId, paidAt])
+  @@map("project_contractor_payments")
+}
+
+model Food {
+  id          String       @id @default(uuid())
+  name        String
+  description String?
+  photoId     String?
+  photo       StoredImage? @relation("FoodPhoto", fields: [photoId], references: [id], onDelete: SetNull)
+  menuItems     RestaurantMenuItem[]
+  reservations  FoodReservation[]
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+
+  @@index([name])
+  @@index([createdAt])
+  @@map("foods")
+}
+
+model Restaurant {
+  id        String       @id @default(uuid())
+  name      String
+  phone     String?
+  address   String?
+  logoId    String?
+  logo      StoredImage? @relation("RestaurantLogo", fields: [logoId], references: [id], onDelete: SetNull)
+  menuItems    RestaurantMenuItem[]
+  orgUnits     OrganizationUnitRestaurant[]
+  reservations FoodReservation[]
+  createdAt    DateTime     @default(now())
+  updatedAt DateTime     @updatedAt
+
+  @@index([name])
+  @@index([phone])
+  @@index([createdAt])
+  @@map("restaurants")
+}
+
+model RestaurantMenuItem {
+  id           String     @id @default(uuid())
+  restaurantId String
+  restaurant   Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  foodId       String
+  food         Food       @relation(fields: [foodId], references: [id], onDelete: Restrict)
+  offeredAt    DateTime   @db.Date
+  price        Decimal    @db.Decimal(18, 0)
+  isActive     Boolean    @default(true)
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+
+  @@unique([restaurantId, foodId, offeredAt])
+  @@index([restaurantId])
+  @@index([foodId])
+  @@index([offeredAt])
+  @@index([isActive])
+  @@index([createdAt])
+  @@map("restaurant_menu_items")
+}
+
+model Organization {
+  id           String              @id @default(uuid())
+  singletonKey String              @unique @default("default")
+  name         String
+  address      String?
+  latitude     Decimal?            @db.Decimal(10, 7)
+  longitude    Decimal?            @db.Decimal(10, 7)
+  eitaa        String?
+  bale         String?
+  rubika       String?
+  instagram    String?
+  telegram     String?
+  whatsapp     String?
+  phones       OrganizationPhone[]
+  createdAt    DateTime            @default(now())
+  updatedAt    DateTime            @updatedAt
+
+  @@map("organizations")
+}
+
+model OrganizationPhone {
+  id             String       @id @default(uuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  title          String
+  phone          String
+  description    String?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  @@index([organizationId])
+  @@index([title])
+  @@index([phone])
+  @@index([createdAt])
+  @@map("organization_phones")
+}
+
+model OrganizationPosition {
+  id                  String               @id @default(uuid())
+  code                String?              @unique
+  name                String               @unique
+  isSystem            Boolean              @default(false)
+  users               User[]
+  boardStagePositions BoardStagePosition[]
+  createdAt           DateTime             @default(now())
+  updatedAt           DateTime             @updatedAt
+
+  @@index([name])
+  @@index([isSystem])
+  @@index([createdAt])
+  @@map("organization_positions")
+}
+
+model OrganizationUnitKind {
+  id        String             @id @default(uuid())
+  name      String             @unique
+  units     OrganizationUnit[]
+  createdAt DateTime           @default(now())
+  updatedAt DateTime           @updatedAt
+
+  @@index([name])
+  @@index([createdAt])
+  @@map("organization_unit_kinds")
+}
+
+model OrganizationUnit {
+  id             String               @id @default(uuid())
+  name           String
+  kindId         String
+  kind           OrganizationUnitKind @relation(fields: [kindId], references: [id], onDelete: Restrict)
+  parentId       String?
+  parent         OrganizationUnit?    @relation("UnitTree", fields: [parentId], references: [id], onDelete: Restrict)
+  children       OrganizationUnit[]   @relation("UnitTree")
+  phone          String?
+  address        String?
+  latitude       Decimal?             @db.Decimal(10, 7)
+  longitude      Decimal?             @db.Decimal(10, 7)
+  eitaa          String?
+  bale           String?
+  rubika         String?
+  instagram      String?
+  telegram       String?
+  whatsapp       String?
+  nutritionRepId String?
+  nutritionRep   User?                @relation("UnitNutritionRep", fields: [nutritionRepId], references: [id], onDelete: SetNull)
+  maxMeals       Int?
+  employees      User[]               @relation("UnitEmployees")
+  restaurants    OrganizationUnitRestaurant[]
+  reservations   FoodReservation[]
+  vehicleAssignments VehicleAssignment[]
+  projectOperators ProjectOperator[]
+  projects         Project[]          @relation("ProjectOrgUnit")
+  boardRequests    BoardRequest[]
+  boardStageUnits  BoardStageUnit[]
+  boardMinutesResolutions BoardMinutesResolution[]
+  createdAt      DateTime             @default(now())
+  updatedAt      DateTime             @updatedAt
+
+  @@index([name])
+  @@index([kindId])
+  @@index([parentId])
+  @@index([phone])
+  @@index([nutritionRepId])
+  @@index([createdAt])
+  @@map("organization_units")
+}
+
+model OrganizationUnitRestaurant {
+  id           String           @id @default(uuid())
+  unitId       String
+  unit         OrganizationUnit @relation(fields: [unitId], references: [id], onDelete: Cascade)
+  restaurantId String
+  restaurant   Restaurant       @relation(fields: [restaurantId], references: [id], onDelete: Restrict)
+  createdAt    DateTime         @default(now())
+  updatedAt    DateTime         @updatedAt
+
+  @@unique([unitId, restaurantId])
+  @@index([unitId])
+  @@index([restaurantId])
+  @@index([createdAt])
+  @@map("organization_unit_restaurants")
+}
+
+model FoodReservation {
+  id           String                @id @default(uuid())
+  reservedAt   DateTime              @db.Date
+  restaurantId String
+  restaurant   Restaurant            @relation(fields: [restaurantId], references: [id], onDelete: Restrict)
+  foodId       String
+  food         Food                  @relation(fields: [foodId], references: [id], onDelete: Restrict)
+  userId       String
+  user         User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  orgUnitId    String
+  orgUnit      OrganizationUnit      @relation(fields: [orgUnitId], references: [id], onDelete: Restrict)
+  quantity     Int
+  unitPrice    Decimal               @db.Decimal(18, 0)
+  status       FoodReservationStatus @default(PENDING)
+  createdAt    DateTime              @default(now())
+  updatedAt    DateTime              @updatedAt
+
+  @@index([userId, reservedAt])
+  @@index([orgUnitId, reservedAt])
+  @@index([restaurantId, reservedAt])
+  @@index([foodId])
+  @@index([status])
+  @@index([createdAt])
+  @@map("food_reservations")
+}
+
+model VehicleBrand {
+  id        String    @id @default(uuid())
+  name      String    @unique
+  vehicles  Vehicle[]
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  @@index([name])
+  @@index([createdAt])
+  @@map("vehicle_brands")
+}
+
+model Vehicle {
+  id            String        @id @default(uuid())
+  assetCode     String        @unique
+  plate         String        @unique
+  type          VehicleType
+  brandId       String
+  brand         VehicleBrand  @relation(fields: [brandId], references: [id], onDelete: Restrict)
+  model         String
+  color         String?
+  year          Int?
+  chassisNumber String?
+  engineNumber  String?
+  status        VehicleStatus @default(ACTIVE)
+  description   String?
+  assignments   VehicleAssignment[]
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+
+  @@index([type])
+  @@index([status])
+  @@index([brandId])
+  @@index([createdAt])
+  @@map("vehicles")
+}
+
+model VehicleAssignment {
+  id                 String                 @id @default(uuid())
+  vehicleId          String
+  vehicle            Vehicle                @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+  organizationUnitId String?
+  organizationUnit   OrganizationUnit?      @relation(fields: [organizationUnitId], references: [id], onDelete: Restrict)
+  personId           String?
+  person             User?                  @relation("VehicleAssignmentPerson", fields: [personId], references: [id], onDelete: Restrict)
+  startDate          DateTime                 @db.Date
+  endDate            DateTime?                @db.Date
+  returnedAt         DateTime?                @db.Date
+  type               VehicleAssignmentType
+  status             VehicleAssignmentStatus  @default(LENT)
+  description        String?
+  createdAt          DateTime                 @default(now())
+  updatedAt          DateTime                 @updatedAt
+
+  @@index([vehicleId, startDate])
+  @@index([organizationUnitId])
+  @@index([personId])
+  @@index([endDate])
+  @@index([status])
+  @@index([returnedAt])
+  @@map("vehicle_assignments")
+}
+
+model Role {
+  id          String           @id @default(uuid())
+  code        String           @unique
+  name        String
+  description String?
+  isSystem    Boolean          @default(false)
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+  users       UserRole[]
+  permissions RolePermission[]
+  caseManagementApprovers CaseManagementApprover[]
+  caseManagementReviews CaseManagementReview[]
+  caseProcessManagementRoles CaseProcessManagementRole[]
+  placesOffice CasePlacesOffice?
+  caseGeneralSettings CaseGeneralSettings[]
+
+  @@index([name])
+  @@index([createdAt])
+  @@map("roles")
+}
+
+model UserRole {
+  userId String
+  roleId String
+  user   User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role   Role @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@id([userId, roleId])
+  @@index([roleId])
+  @@map("user_roles")
+}
+
+model RolePermission {
+  roleId String
+  code   String
+  role   Role @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@id([roleId, code])
+  @@index([code])
+  @@map("role_permissions")
+}
+
+enum SingardFeedbackKind {
+  SUGGESTION
+  COMPLAINT
+  CRITICISM
+  REPORT
+}
+
+enum SingardFeedbackStatus {
+  NEW
+  IN_PROGRESS
+  ANSWERED
+  CLOSED
+}
+
+enum SingardAttachmentKind {
+  IMAGE
+  AUDIO
+  VIDEO
+}
+
+enum SingardActivityKind {
+  NOTE
+  CONTACT
+  REPLY
+}
+
+model SingardCategory {
+  id          String            @id @default(uuid())
+  parentId    String?
+  parent      SingardCategory?  @relation("SingardCategoryTree", fields: [parentId], references: [id], onDelete: Restrict)
+  children    SingardCategory[] @relation("SingardCategoryTree")
+  name        String
+  description String?
+  sortOrder   Int               @default(0)
+  isActive    Boolean           @default(true)
+  feedbacks   SingardFeedback[]
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+
+  @@index([parentId, sortOrder])
+  @@index([isActive])
+  @@index([name])
+  @@index([createdAt])
+  @@map("singard_categories")
+}
+
+model SingardFeedback {
+  id           String                @id @default(uuid())
+  trackingCode String                @unique
+  kind         SingardFeedbackKind
+  status       SingardFeedbackStatus @default(NEW)
+  categoryId   String
+  category     SingardCategory       @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+  userId       String?
+  user         User?                 @relation("SingardFeedbackAuthor", fields: [userId], references: [id], onDelete: SetNull)
+  isAnonymous  Boolean               @default(true)
+  firstName    String?
+  lastName     String?
+  phone        String?
+  body         String?
+  address      String?
+  latitude     Decimal?              @db.Decimal(10, 7)
+  longitude    Decimal?              @db.Decimal(10, 7)
+  replyBody    String?
+  repliedAt    DateTime?
+  repliedById  String?
+  repliedBy    User?                 @relation("SingardFeedbackReplier", fields: [repliedById], references: [id], onDelete: SetNull)
+  attachments  SingardAttachment[]
+  activities   SingardActivity[]
+  createdAt    DateTime              @default(now())
+  updatedAt    DateTime              @updatedAt
+
+  @@index([kind, status])
+  @@index([categoryId])
+  @@index([userId])
+  @@index([phone])
+  @@index([createdAt])
+  @@map("singard_feedbacks")
+}
+
+model SingardAttachment {
+  id         String                @id @default(uuid())
+  feedbackId String
+  feedback   SingardFeedback       @relation(fields: [feedbackId], references: [id], onDelete: Cascade)
+  kind       SingardAttachmentKind
+  imageId    String?
+  image      StoredImage?          @relation(fields: [imageId], references: [id], onDelete: Restrict)
+  fileId     String?
+  file       StoredFile?           @relation(fields: [fileId], references: [id], onDelete: Restrict)
+  sortOrder  Int                   @default(0)
+  createdAt  DateTime              @default(now())
+
+  @@index([feedbackId, sortOrder])
+  @@index([imageId])
+  @@index([fileId])
+  @@map("singard_attachments")
+}
+
+model SingardActivity {
+  id          String             @id @default(uuid())
+  feedbackId  String
+  feedback    SingardFeedback    @relation(fields: [feedbackId], references: [id], onDelete: Cascade)
+  kind        SingardActivityKind @default(NOTE)
+  occurredAt  DateTime           @db.Date
+  title       String
+  body        String?
+  createdById String
+  createdBy   User               @relation(fields: [createdById], references: [id], onDelete: Restrict)
+  createdAt   DateTime           @default(now())
+  updatedAt   DateTime           @updatedAt
+
+  @@index([feedbackId, occurredAt])
+  @@index([createdById])
+  @@index([createdAt])
+  @@map("singard_activities")
+}
+
+enum BoardRequestStatus {
+  PENDING_REVIEW
+  PENDING_LEGAL
+  PENDING_BUDGET
+  PENDING_SECRETARY
+  APPROVED
+  REJECTED
+}
+
+enum BoardStage {
+  REQUEST
+  MANAGEMENT
+  LEGAL
+  BUDGET
+  SECRETARY
+}
+
+enum BoardAttachmentKind {
+  IMAGE
+  FILE
+}
+
+model BoardRequest {
+  id              String             @id @default(uuid())
+  status          BoardRequestStatus @default(PENDING_REVIEW)
+  requestedAt     DateTime           @db.Date
+  unitId          String
+  unit            OrganizationUnit   @relation(fields: [unitId], references: [id], onDelete: Restrict)
+  orgPositionText String
+  subject         String
+  justification   String?
+  topicHistory    String?
+  description     String?
+  createdById     String
+  createdBy       User               @relation("BoardRequestAuthor", fields: [createdById], references: [id], onDelete: Restrict)
+  managementComment String?
+  managementAt      DateTime?        @db.Date
+  managementById    String?
+  managementBy      User?            @relation("BoardManagementReviewer", fields: [managementById], references: [id], onDelete: SetNull)
+  legalOrgMatch            Boolean?
+  legalRegulationsMatch    Boolean?
+  legalComment             String?
+  legalAt                  DateTime? @db.Date
+  legalById                String?
+  legalBy                  User?     @relation("BoardLegalReviewer", fields: [legalById], references: [id], onDelete: SetNull)
+  budgetProgramHistory       Boolean?
+  budgetCurrentYearFunding   Boolean?
+  budgetComment              String?
+  budgetAt                   DateTime? @db.Date
+  budgetById                 String?
+  budgetBy                   User?     @relation("BoardBudgetReviewer", fields: [budgetById], references: [id], onDelete: SetNull)
+  secretaryComment String?
+  secretaryAt      DateTime?         @db.Date
+  secretaryById    String?
+  secretaryBy      User?             @relation("BoardSecretaryReviewer", fields: [secretaryById], references: [id], onDelete: SetNull)
+  rejectedStage    BoardStage?
+  rejectedComment  String?
+  rejectedAt       DateTime?         @db.Date
+  rejectedById     String?
+  rejectedBy       User?             @relation("BoardRequestRejecter", fields: [rejectedById], references: [id], onDelete: SetNull)
+  attachments      BoardAttachment[]
+  minutes          BoardMinutes[]
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+
+  @@index([status])
+  @@index([unitId])
+  @@index([createdById])
+  @@index([requestedAt])
+  @@index([subject])
+  @@index([createdAt])
+  @@map("board_requests")
+}
+
+model BoardAttachment {
+  id           String               @id @default(uuid())
+  requestId    String
+  request      BoardRequest         @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  stage        BoardStage
+  kind         BoardAttachmentKind
+  imageId      String?
+  image        StoredImage?         @relation(fields: [imageId], references: [id], onDelete: Restrict)
+  fileId       String?
+  file         StoredFile?          @relation(fields: [fileId], references: [id], onDelete: Restrict)
+  originalName String?
+  sortOrder    Int                  @default(0)
+  createdAt    DateTime             @default(now())
+
+  @@index([requestId, sortOrder])
+  @@index([stage])
+  @@index([imageId])
+  @@index([fileId])
+  @@map("board_attachments")
+}
+
+model BoardStageUnit {
+  stage     BoardStage
+  unitId    String
+  unit      OrganizationUnit @relation(fields: [unitId], references: [id], onDelete: Cascade)
+  createdAt DateTime         @default(now())
+
+  @@id([stage, unitId])
+  @@index([unitId])
+  @@map("board_stage_units")
+}
+
+model BoardStagePosition {
+  stage      BoardStage
+  positionId String
+  position   OrganizationPosition @relation(fields: [positionId], references: [id], onDelete: Cascade)
+  createdAt  DateTime             @default(now())
+
+  @@id([stage, positionId])
+  @@index([positionId])
+  @@map("board_stage_positions")
+}
+
+enum BoardMinutesAttendance {
+  PRESENT
+  ABSENT
+}
+
+enum BoardMinutesAttachmentKind {
+  IMAGE
+  AUDIO
+}
+
+model BoardMinutes {
+  id          String                     @id @default(uuid())
+  requestId   String?
+  request     BoardRequest?              @relation(fields: [requestId], references: [id], onDelete: Restrict)
+  heldAt      DateTime                   @db.Date
+  subject     String
+  body        String?
+  createdById String
+  createdBy   User                       @relation("BoardMinutesAuthor", fields: [createdById], references: [id], onDelete: Restrict)
+  members     BoardMinutesMember[]
+  attachments BoardMinutesAttachment[]
+  resolutions BoardMinutesResolution[]
+  createdAt   DateTime                   @default(now())
+  updatedAt   DateTime                   @updatedAt
+
+  @@index([requestId])
+  @@index([heldAt])
+  @@index([subject])
+  @@index([createdById])
+  @@index([createdAt])
+  @@map("board_minutes")
+}
+
+model BoardMinutesMember {
+  id          String                   @id @default(uuid())
+  minutesId   String
+  minutes     BoardMinutes             @relation(fields: [minutesId], references: [id], onDelete: Cascade)
+  userId      String
+  user        User                     @relation(fields: [userId], references: [id], onDelete: Restrict)
+  attendance  BoardMinutesAttendance   @default(PRESENT)
+  createdAt   DateTime                 @default(now())
+
+  @@unique([minutesId, userId])
+  @@index([userId])
+  @@index([minutesId])
+  @@map("board_minutes_members")
+}
+
+model BoardMinutesAttachment {
+  id           String                      @id @default(uuid())
+  minutesId    String
+  minutes      BoardMinutes                @relation(fields: [minutesId], references: [id], onDelete: Cascade)
+  kind         BoardMinutesAttachmentKind
+  imageId      String?
+  image        StoredImage?                @relation(fields: [imageId], references: [id], onDelete: Restrict)
+  fileId       String?
+  file         StoredFile?                 @relation(fields: [fileId], references: [id], onDelete: Restrict)
+  originalName String?
+  sortOrder    Int                         @default(0)
+  createdAt    DateTime                    @default(now())
+
+  @@index([minutesId, sortOrder])
+  @@index([imageId])
+  @@index([fileId])
+  @@map("board_minutes_attachments")
+}
+
+model BoardMinutesResolution {
+  id          String           @id @default(uuid())
+  minutesId   String
+  minutes     BoardMinutes     @relation(fields: [minutesId], references: [id], onDelete: Cascade)
+  title       String
+  description String?
+  unitId      String?
+  unit        OrganizationUnit? @relation(fields: [unitId], references: [id], onDelete: SetNull)
+  dueDate     DateTime?        @db.Date
+  notes       String?
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+
+  @@index([minutesId])
+  @@index([unitId])
+  @@index([dueDate])
+  @@index([title])
+  @@index([createdAt])
+  @@map("board_minutes_resolutions")
+}
+
+model CommercialComplex {
+  id         String            @id @default(uuid())
+  name       String
+  nameEn     String
+  address    String?
+  postalCode String?
+  isActive   Boolean           @default(true)
+  floors       CommercialFloor[]
+  premiseCases CaseFile[]        @relation("CasePremiseComplex")
+  locationDrafts CaseLocationDraft[] @relation("LocationDraftComplex")
+  premiseHistories CasePremiseHistory[] @relation("PremiseHistoryComplex")
+  createdAt    DateTime          @default(now())
+  updatedAt  DateTime          @updatedAt
+
+  @@index([isActive])
+  @@index([name])
+  @@map("commercial_complexes")
+}
+
+model CommercialFloor {
+  id          String            @id @default(uuid())
+  complexId   String
+  complex     CommercialComplex @relation(fields: [complexId], references: [id], onDelete: Cascade)
+  title       String
+  description String?
+  code        String
+  lanes       CommercialLane[]
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+
+  @@unique([complexId, code])
+  @@index([complexId])
+  @@index([title])
+  @@map("commercial_floors")
+}
+
+model CommercialLane {
+  id          String           @id @default(uuid())
+  floorId     String
+  floor       CommercialFloor  @relation(fields: [floorId], references: [id], onDelete: Cascade)
+  title       String
+  description String?
+  code        String
+  units       CommercialUnit[]
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+
+  @@unique([floorId, code])
+  @@index([floorId])
+  @@index([title])
+  @@map("commercial_lanes")
+}
+
+model CommercialUnit {
+  id          String         @id @default(uuid())
+  laneId      String
+  lane        CommercialLane @relation(fields: [laneId], references: [id], onDelete: Cascade)
+  plaque      String
+  description String?
+  code        String
+  isActive    Boolean        @default(true)
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+
+  @@unique([laneId, code])
+  @@index([laneId, isActive])
+  @@index([plaque])
+  @@map("commercial_units")
+}
+
+model WorkUnit {
+  id          String   @id @default(uuid())
+  title       String   @unique
+  description String?
+  isActive    Boolean  @default(true)
+  users       User[]
+  caseManagementApprovers CaseManagementApprover[]
+  caseManagementReviews CaseManagementReview[]
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([title])
+  @@index([isActive])
+  @@index([createdAt])
+  @@map("work_units")
+}
+
+model StaffPost {
+  id          String   @id @default(uuid())
+  title       String   @unique
+  description String?
+  isActive    Boolean  @default(true)
+  users       User[]
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([title])
+  @@index([isActive])
+  @@index([createdAt])
+  @@map("staff_posts")
+}
+
+model ViolationType {
+  id          String      @id @default(uuid())
+  title       String      @unique
+  description String?
+  isActive    Boolean     @default(true)
+  violations  Violation[]
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+
+  @@index([title])
+  @@index([isActive])
+  @@index([createdAt])
+  @@map("violation_types")
+}
+
+model RegistrationPlace {
+  id           String     @id @default(uuid())
+  title        String     @unique
+  description  String?
+  isActive     Boolean    @default(true)
+  isDefault    Boolean    @default(false)
+  premiseCases CaseFile[] @relation("CaseRegistrationPlace")
+  locationDrafts CaseLocationDraft[] @relation("LocationDraftRegistration")
+  premiseHistories CasePremiseHistory[] @relation("PremiseHistoryRegistration")
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+
+  @@unique([isDefault], map: "registration_places_one_default", where: { isDefault: true })
+  @@index([title])
+  @@index([isActive])
+  @@index([isDefault])
+  @@index([createdAt])
+  @@map("registration_places")
+}
+
+enum ViolationStatus {
+  REGISTERED
+  UNDER_REVIEW
+  NOTICE
+  REFERRED
+  VERDICT_ISSUED
+  CLOSED
+  DISMISSED
+}
+
+enum ViolationAttachmentKind {
+  IMAGE
+  FILE
+}
+
+model Violation {
+  id              String                 @id @default(uuid())
+  nationalId      String
+  violationTypeId String
+  violationType   ViolationType          @relation(fields: [violationTypeId], references: [id], onDelete: Restrict)
+  occurredAt      DateTime               @db.Date
+  description     String?
+  status          ViolationStatus        @default(REGISTERED)
+  caseUserId      String?
+  caseUser        User?                  @relation("ViolationCase", fields: [caseUserId], references: [id], onDelete: SetNull)
+  caseFileId      String?
+  caseFile        CaseFile?              @relation(fields: [caseFileId], references: [id], onDelete: SetNull)
+  createdById     String
+  createdBy       User                   @relation("ViolationAuthor", fields: [createdById], references: [id], onDelete: Restrict)
+  attachments     ViolationAttachment[]
+  proceedings     ViolationProceeding[]
+  createdAt       DateTime               @default(now())
+  updatedAt       DateTime               @updatedAt
+
+  @@index([nationalId])
+  @@index([violationTypeId])
+  @@index([status])
+  @@index([caseUserId])
+  @@index([caseFileId])
+  @@index([occurredAt])
+  @@index([createdById])
+  @@index([createdAt])
+  @@map("violations")
+}
+
+model ViolationAttachment {
+  id           String                  @id @default(uuid())
+  violationId  String
+  violation    Violation               @relation(fields: [violationId], references: [id], onDelete: Cascade)
+  kind         ViolationAttachmentKind
+  imageId      String?
+  image        StoredImage?            @relation("ViolationAttachmentImage", fields: [imageId], references: [id], onDelete: Restrict)
+  fileId       String?
+  file         StoredFile?             @relation("ViolationAttachmentFile", fields: [fileId], references: [id], onDelete: Restrict)
+  originalName String?
+  sortOrder    Int                     @default(0)
+  createdAt    DateTime                @default(now())
+
+  @@index([violationId, sortOrder])
+  @@index([imageId])
+  @@index([fileId])
+  @@map("violation_attachments")
+}
+
+model ViolationProceeding {
+  id           String                          @id @default(uuid())
+  violationId  String
+  violation    Violation                       @relation(fields: [violationId], references: [id], onDelete: Cascade)
+  occurredAt   DateTime                        @db.Date
+  title        String
+  description  String?
+  createdById  String
+  createdBy    User                            @relation("ViolationProceedingAuthor", fields: [createdById], references: [id], onDelete: Restrict)
+  attachments  ViolationProceedingAttachment[]
+  createdAt    DateTime                        @default(now())
+  updatedAt    DateTime                        @updatedAt
+
+  @@index([violationId, occurredAt])
+  @@index([title])
+  @@index([createdById])
+  @@index([createdAt])
+  @@map("violation_proceedings")
+}
+
+model ViolationProceedingAttachment {
+  id           String                  @id @default(uuid())
+  proceedingId String
+  proceeding   ViolationProceeding     @relation(fields: [proceedingId], references: [id], onDelete: Cascade)
+  kind         ViolationAttachmentKind
+  imageId      String?
+  image        StoredImage?            @relation("ViolationProceedingAttachmentImage", fields: [imageId], references: [id], onDelete: Restrict)
+  fileId       String?
+  file         StoredFile?             @relation("ViolationProceedingAttachmentFile", fields: [fileId], references: [id], onDelete: Restrict)
+  originalName String?
+  sortOrder    Int                     @default(0)
+  createdAt    DateTime                @default(now())
+
+  @@index([proceedingId, sortOrder])
+  @@index([imageId])
+  @@index([fileId])
+  @@map("violation_proceeding_attachments")
+}
+
+model SmsSettings {
+  id           String   @id @default(uuid())
+  singletonKey String   @unique @default("default")
+  isActive     Boolean  @default(false)
+  endpoint     String?
+  senderNumber String?
+  username     String?
+  password     String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@map("sms_settings")
+}
+
+enum ScheduledJobTrigger {
+  SYSTEM
+  MANUAL
+}
+
+enum ScheduledJobRunStatus {
+  RUNNING
+  SUCCESS
+  FAILED
+  SKIPPED
+}
+
+/// تعریف پایدار کارهای زمان‌بندی؛ متادیتای نمایشی در رجیستری کد است.
+model ScheduledJob {
+  code        String                 @id
+  enabled     Boolean                @default(true)
+  lastRunAt   DateTime?
+  lastStatus  ScheduledJobRunStatus?
+  lastMessage String?
+  runs        ScheduledJobRun[]
+  createdAt   DateTime               @default(now())
+  updatedAt   DateTime               @updatedAt
+
+  @@map("scheduled_jobs")
+}
+
+model ScheduledJobRun {
+  id            String                @id @default(uuid())
+  jobCode       String
+  job           ScheduledJob          @relation(fields: [jobCode], references: [code], onDelete: Cascade)
+  trigger       ScheduledJobTrigger
+  status        ScheduledJobRunStatus
+  startedAt     DateTime              @default(now())
+  finishedAt    DateTime?
+  message       String?
+  detail        Json?
+  triggeredById String?
+  triggeredBy   User?                 @relation("ScheduledJobRunner", fields: [triggeredById], references: [id], onDelete: SetNull)
+  createdAt     DateTime              @default(now())
+
+  @@index([jobCode, startedAt])
+  @@index([status])
+  @@index([triggeredById])
+  @@map("scheduled_job_runs")
+}
