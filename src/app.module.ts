@@ -8,6 +8,7 @@ import configuration from './config/configuration';
 import { IssuanceModule } from './issuance/issuance.module';
 import { LookupsModule } from './lookups/lookups.module';
 import { PrismaModule } from './prisma/prisma.module';
+import { SmsModule } from './sms/sms.module';
 import { ViolationsModule } from './violations/violations.module';
 
 @Module({
@@ -25,6 +26,7 @@ import { ViolationsModule } from './violations/violations.module';
     IssuanceModule,
     LookupsModule,
     BaseInfoModule,
+    SmsModule,
     ViolationsModule,
   ],
 })

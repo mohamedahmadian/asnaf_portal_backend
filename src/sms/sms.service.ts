@@ -1,10 +1,41 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { phoneLookupValues } from '../auth/identity';
+import { Prisma } from '../generated/prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { MySmsListQuery, smsSortFields } from './dto/my-sms-list.query';
 
 export type SendSmsInput = {
   phone: string;
   body: string;
+  source?: 'MANUAL' | 'PASSWORD' | 'PAYMENT_LINK' | 'STEWARDSHIP';
 };
+
+const messageSelect = {
+  id: true,
+  phone: true,
+  body: true,
+  status: true,
+  source: true,
+  createdAt: true,
+} satisfies Prisma.SmsMessageSelect;
+
+function listOrder(
+  sortBy: (typeof smsSortFields)[number] | undefined,
+  sortDir: 'asc' | 'desc' | undefined,
+): Prisma.SmsMessageOrderByWithRelationInput[] {
+  const dir = sortDir === 'asc' ? 'asc' : 'desc';
+  const tie = { id: 'asc' as const };
+  switch (sortBy) {
+    case 'status':
+      return [{ status: dir }, tie];
+    case 'source':
+      return [{ source: dir }, tie];
+    case 'createdAt':
+      return [{ createdAt: dir }, tie];
+    default:
+      return [{ createdAt: 'desc' }, tie];
+  }
+}
 
 @Injectable()
 export class SmsService {
@@ -12,35 +43,79 @@ export class SmsService {
 
   constructor(private readonly prisma: PrismaService) {}
 
+  /**
+   * ارسال واقعی به درگاه هنوز وصل نیست.
+   * هر دستور ارسال در تاریخچهٔ مشترک ثبت می‌شود.
+   */
   async send(input: SendSmsInput) {
-    const settings = await this.prisma.smsSettings.findUnique({
-      where: { singletonKey: 'default' },
+    this.logger.warn(
+      `SMS mock. Would send to ${input.phone} (${input.body.length} chars)`,
+    );
+    await this.prisma.smsMessage.create({
+      data: {
+        phone: input.phone,
+        body: input.body,
+        source: input.source ?? 'MANUAL',
+        status: 'SKIPPED',
+      },
     });
-    if (!settings?.isActive || !settings.endpoint) {
-      this.logger.warn(`SMS mock. Would send to ${input.phone} (${input.body.length} chars)`);
-      return { mocked: true, skipped: true };
+    return { mocked: true, skipped: true };
+  }
+
+  async listMine(userId: string, query: MySmsListQuery) {
+    const phones = await this.phonesOf(userId);
+    if (!phones.length) {
+      return { items: [], total: 0, page: query.page, pageSize: query.pageSize };
     }
-    try {
-      const response = await fetch(settings.endpoint, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          username: settings.username ?? '',
-          password: settings.password ?? '',
-          from: settings.senderNumber ?? '',
-          to: input.phone,
-          text: input.body,
-        }),
-        signal: AbortSignal.timeout(8000),
-      });
-      if (!response.ok) {
-        this.logger.warn(`SMS send failed ${response.status} for ${input.phone}`);
-        return { mocked: false, skipped: true };
-      }
-      return { mocked: false, skipped: false };
-    } catch (error) {
-      this.logger.warn(`SMS send error for ${input.phone}: ${String(error)}`);
-      return { mocked: false, skipped: true };
-    }
+    const where = this.where(phones, query);
+    const [total, rows] = await Promise.all([
+      this.prisma.smsMessage.count({ where }),
+      this.prisma.smsMessage.findMany({
+        where,
+        orderBy: listOrder(query.sortBy, query.sortDir),
+        skip: (query.page - 1) * query.pageSize,
+        take: query.pageSize,
+        select: messageSelect,
+      }),
+    ]);
+    return { items: rows, total, page: query.page, pageSize: query.pageSize };
+  }
+
+  async findMine(userId: string, id: string) {
+    const phones = await this.phonesOf(userId);
+    if (!phones.length) throw new NotFoundException('پیامک یافت نشد');
+    const item = await this.prisma.smsMessage.findFirst({
+      where: { id, phone: { in: phones } },
+      select: messageSelect,
+    });
+    if (!item) throw new NotFoundException('پیامک یافت نشد');
+    return item;
+  }
+
+  private async phonesOf(userId: string) {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { phone: true },
+    });
+    const phone = user?.phone?.trim();
+    if (!phone) return [];
+    const values = phoneLookupValues(phone);
+    return values.length ? values : [phone];
+  }
+
+  private where(
+    phones: string[],
+    query: MySmsListQuery,
+  ): Prisma.SmsMessageWhereInput {
+    const q = query.q?.trim();
+    return {
+      phone: { in: phones },
+      ...(query.status ? { status: query.status } : {}),
+      ...(q
+        ? {
+            body: { contains: q, mode: 'insensitive' },
+          }
+        : {}),
+    };
   }
 }

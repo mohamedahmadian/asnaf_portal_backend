@@ -431,7 +431,7 @@ export class PortalStewardshipService {
         ].join('\n')
       : 'پرونده مباشرت برای شما ایجاد شد. برای تکمیل درخواست کارت مباشرت وارد سامانه شوید.';
     try {
-      await this.sms.send({ phone: user.phone, body });
+      await this.sms.send({ phone: user.phone, body, source: 'STEWARDSHIP' });
     } catch (error) {
       this.logger.warn(`Steward SMS failed for ${user.phone}: ${String(error)}`);
     }

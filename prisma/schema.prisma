@@ -2855,6 +2855,36 @@ model SmsSettings {
   @@map("sms_settings")
 }
 
+enum SmsMessageStatus {
+  SKIPPED
+  SENT
+  FAILED
+}
+
+enum SmsMessageSource {
+  MANUAL
+  PASSWORD
+  PAYMENT_LINK
+  STEWARDSHIP
+}
+
+/// هر دستور ارسال پیامک؛ ارسال واقعی هنوز وصل نیست.
+model SmsMessage {
+  id           String           @id @default(uuid())
+  phone        String
+  body         String
+  status       SmsMessageStatus
+  source       SmsMessageSource @default(MANUAL)
+  errorMessage String?
+  createdAt    DateTime         @default(now())
+
+  @@index([createdAt])
+  @@index([phone])
+  @@index([status])
+  @@index([source])
+  @@map("sms_messages")
+}
+
 enum ScheduledJobTrigger {
   SYSTEM
   MANUAL
