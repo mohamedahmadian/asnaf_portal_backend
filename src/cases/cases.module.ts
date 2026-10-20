@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  Body,
   Controller,
   Delete,
   Get,
@@ -7,19 +8,32 @@ import {
   Module,
   NotFoundException,
   Param,
+  Patch,
+  Post,
   Query,
   Res,
+  UploadedFile,
+  UseInterceptors,
 } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { memoryStorage } from 'multer';
 import { Transform } from 'class-transformer';
 import { IsIn, IsInt, IsOptional, IsString, Max, Min } from 'class-validator';
 import type { Response } from 'express';
+import { randomUUID } from 'node:crypto';
 import { createReadStream } from 'node:fs';
-import { unlink } from 'node:fs/promises';
-import * as path from 'node:path';
+import { mkdir, unlink, writeFile } from 'node:fs/promises';
+import path from 'node:path';
 import { ConfigService } from '@nestjs/config';
+import {
+  removeStoredKeys,
+  resolveStoredAbsolute,
+} from '../storage/stored-file';
 import { CurrentUser, PortalUser } from '../auth/auth.module';
 import {
   CaseFileKind,
+  CaseFileStatus,
+  CaseRevokeSource,
   CaseRequestStatus,
   CaseRequestType,
   PaymentStatus,
@@ -30,6 +44,39 @@ import {
   Prisma,
 } from '../generated/prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { CreatePortalStewardDto } from './dto/create-portal-steward.dto';
+import { RevokePortalStewardshipDto } from './dto/revoke-portal-stewardship.dto';
+import { SavePortalAuctionDto } from './dto/save-portal-auction.dto';
+import { PortalAuctionService } from './portal-auction.service';
+import { PortalLettersService } from './portal-letters.service';
+import {
+  PortalRenewalService,
+  UploadPortalRenewalDocumentDto,
+} from './portal-renewal.service';
+import { PortalLocationService } from './portal-location.service';
+import { SavePortalLocationDto } from './dto/save-portal-location.dto';
+import {
+  PortalStewardshipService,
+  portalStewardshipActionEnabled,
+} from './portal-stewardship.service';
+import { SmsModule } from '../sms/sms.module';
+import {
+  PortalStewardFormationService,
+  UploadPortalStewardDocumentDto,
+} from './portal-steward-formation.service';
+import { SavePortalStewardIdentityDto } from './dto/save-portal-steward-identity.dto';
+
+const upload = FileInterceptor('file', {
+  storage: memoryStorage(),
+  limits: { fileSize: 8 * 1024 * 1024 },
+});
+
+type UploadFile = {
+  buffer: Buffer;
+  size: number;
+  mimetype: string;
+  originalname: string;
+};
 
 const CASE_SORTS = [
   'createdAt',
@@ -64,6 +111,14 @@ const CASE_KINDS = [
 
 const CASE_STATUSES = ['ACTIVE', 'SUSPENDED', 'EXPIRED', 'REVOKED'] as const;
 
+function requestInquiryStep(type: CaseRequestType) {
+  if (type === CaseRequestType.ISSUANCE) return 3;
+  if (type === CaseRequestType.STEWARDSHIP) return 1;
+  if (type === CaseRequestType.RENEWAL || type === CaseRequestType.LOCATION_CHANGE) return 2;
+  if (type === CaseRequestType.AUCTION) return 1;
+  return 0;
+}
+
 function latinDigits(value: string) {
   const persian = '۰۱۲۳۴۵۶۷۸۹';
   const arabic = '٠١٢٣٤٥٦٧٨٩';
@@ -73,8 +128,108 @@ function latinDigits(value: string) {
   });
 }
 
+function parseIsoDateOnly(value: string) {
+  const parsed = new Date(`${value}T00:00:00.000Z`);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function localTodayIso() {
+  const now = new Date();
+  const month = String(now.getMonth() + 1).padStart(2, '0');
+  const day = String(now.getDate()).padStart(2, '0');
+  return `${now.getFullYear()}-${month}-${day}`;
+}
+
+function uploadExtension(mimeType: string) {
+  if (mimeType === 'application/pdf') return '.pdf';
+  if (mimeType === 'image/png') return '.png';
+  if (mimeType === 'image/webp') return '.webp';
+  if (mimeType.startsWith('audio/')) return '.webm';
+  return '.jpg';
+}
+
 function dateOnly(value: Date | null) {
   return value ? value.toISOString().slice(0, 10) : null;
+}
+
+function imageDataUrl(image: { mimeType: string; data: Buffer | Uint8Array } | null | undefined) {
+  if (!image) return null;
+  return `data:${image.mimeType};base64,${Buffer.from(image.data).toString('base64')}`;
+}
+
+function utcDay(value: Date) {
+  return Date.UTC(
+    value.getUTCFullYear(),
+    value.getUTCMonth(),
+    value.getUTCDate(),
+  );
+}
+
+function tehranToday() {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Tehran',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(new Date());
+  return new Date(`${parts}T00:00:00.000Z`);
+}
+
+function suspensionIsActive(row: {
+  startsAt: Date;
+  endsAt: Date | null;
+  liftedAt: Date | null;
+}) {
+  if (row.liftedAt) return false;
+  const today = tehranToday();
+  if (utcDay(row.startsAt) > utcDay(today)) return false;
+  if (!row.endsAt) return true;
+  return utcDay(row.endsAt) >= utcDay(today);
+}
+
+const portalViolationSelect = {
+  id: true,
+  nationalId: true,
+  occurredAt: true,
+  description: true,
+  status: true,
+  violationType: { select: { id: true, title: true } },
+  caseFile: { select: { id: true, businessUnitTitle: true } },
+  attachments: {
+    orderBy: { sortOrder: 'asc' as const },
+    select: {
+      id: true,
+      kind: true,
+      originalName: true,
+      image: { select: { mimeType: true } },
+      file: { select: { mimeType: true } },
+    },
+  },
+} satisfies Prisma.ViolationSelect;
+
+function mapPortalViolation(
+  item: Prisma.ViolationGetPayload<{ select: typeof portalViolationSelect }>,
+) {
+  return {
+    id: item.id,
+    nationalId: item.nationalId,
+    description: item.description,
+    status: item.status,
+    violationType: item.violationType,
+    caseFile: item.caseFile
+      ? {
+          id: item.caseFile.id,
+          businessUnitTitle: item.caseFile.businessUnitTitle,
+        }
+      : null,
+    occurredAt: dateOnly(item.occurredAt),
+    attachments: item.attachments.map((attachment) => ({
+      id: attachment.id,
+      kind: attachment.kind,
+      originalName: attachment.originalName,
+      mimeType: attachment.file?.mimeType ?? attachment.image?.mimeType ?? null,
+    })),
+  };
 }
 
 function decimalText(value: Prisma.Decimal | null) {
@@ -302,7 +457,12 @@ function listOrder(
     case 'businessUnitTitle':
       return [{ businessUnitTitle: dir }, tie];
     case 'licenseNumber':
-      return [{ licenseNumber: dir }, tie];
+      return [
+        { licenseNumber: dir },
+        { hostCaseFile: { licenseNumber: dir } },
+        { cardNumber: dir },
+        tie,
+      ];
     case 'formationStep':
       return [{ formationStep: dir }, tie];
     case 'status':
@@ -390,6 +550,11 @@ export class CasesService {
             OR: [
               { licenseNumber: { contains: q, mode: 'insensitive' } },
               { cardNumber: { contains: q, mode: 'insensitive' } },
+              {
+                hostCaseFile: {
+                  licenseNumber: { contains: q, mode: 'insensitive' },
+                },
+              },
               { businessUnitTitle: { contains: q, mode: 'insensitive' } },
               {
                 hostCaseFile: {
@@ -406,6 +571,7 @@ export class CasesService {
                 ? [
                     { licenseNumber: { contains: digits } },
                     { cardNumber: { contains: digits } },
+                    { hostCaseFile: { licenseNumber: { contains: digits } } },
                   ]
                 : []),
             ],
@@ -432,6 +598,8 @@ export class CasesService {
       hostCaseFile: {
         select: {
           businessUnitTitle: true,
+          licenseNumber: true,
+          licenseExpiresAt: true,
           activityJob: { select: listJobSelect },
         },
       },
@@ -473,6 +641,12 @@ export class CasesService {
         licenseExpiresAt: dateOnly(
           steward ? row.cardExpiresAt : row.licenseExpiresAt,
         ),
+        hostLicenseNumber: steward
+          ? row.hostCaseFile?.licenseNumber ?? null
+          : null,
+        hostLicenseExpiresAt: steward
+          ? dateOnly(row.hostCaseFile?.licenseExpiresAt ?? null)
+          : null,
         businessUnitTitle: row.businessUnitTitle,
         createdAt: row.createdAt,
         updatedAt: row.updatedAt,
@@ -502,6 +676,9 @@ export class CasesService {
         licenseNumber: true,
         licenseIssuedAt: true,
         licenseExpiresAt: true,
+        cardNumber: true,
+        cardIssuedAt: true,
+        cardExpiresAt: true,
         businessUnitTitle: true,
         previousOccupation: true,
         posDeviceCount: true,
@@ -517,6 +694,39 @@ export class CasesService {
             id: true,
             title: true,
             group: { select: { id: true, title: true } },
+            jobType: { select: { id: true, title: true } },
+          },
+        },
+        hostCaseFile: {
+          select: {
+            id: true,
+            licenseNumber: true,
+            licenseIssuedAt: true,
+            licenseExpiresAt: true,
+            businessUnitTitle: true,
+            premiseCity: {
+              select: {
+                id: true,
+                nameFa: true,
+                province: { select: { id: true, nameFa: true } },
+              },
+            },
+            activityJob: {
+              select: {
+                id: true,
+                title: true,
+                group: { select: { id: true, title: true } },
+                jobType: { select: { id: true, title: true } },
+              },
+            },
+            user: {
+              select: {
+                firstName: true,
+                lastName: true,
+                fullName: true,
+                phone: true,
+              },
+            },
           },
         },
         premiseCity: {
@@ -528,8 +738,40 @@ export class CasesService {
         },
         premiseComplex: { select: { id: true, name: true } },
         registrationPlace: { select: { id: true, title: true } },
-        user: { select: { nationalId: true } },
+        user: {
+          select: {
+            nationalId: true,
+            fullName: true,
+            firstName: true,
+            lastName: true,
+            phone: true,
+          },
+        },
         _count: { select: { suspensions: true } },
+        suspensions: {
+          orderBy: [
+            { startsAt: 'desc' },
+            { createdAt: 'desc' },
+            { id: 'desc' },
+          ],
+          select: {
+            id: true,
+            reason: true,
+            startsAt: true,
+            endsAt: true,
+            liftNote: true,
+            liftedAt: true,
+            files: {
+              orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+              select: {
+                id: true,
+                kind: true,
+                originalName: true,
+                mimeType: true,
+              },
+            },
+          },
+        },
         requests: {
           orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
           select: {
@@ -538,14 +780,18 @@ export class CasesService {
             type: true,
             status: true,
             formationStep: true,
+            intakeSubmittedAt: true,
             completedAt: true,
             createdAt: true,
+            _count: { select: { inquiries: true, payments: true } },
           },
         },
       },
     });
     if (!row) throw new NotFoundException('پرونده یافت نشد');
-    const { user: owner, _count, ...safeRow } = row;
+    const { user: owner, _count, suspensions, hostCaseFile, requests, ...safeRow } = row;
+    const steward = row.kind === CaseFileKind.STEWARDSHIP;
+    const hostJob = hostCaseFile?.activityJob ?? null;
     const violationCount = owner.nationalId
       ? await this.prisma.violation.count({
           where: { nationalId: owner.nationalId },
@@ -553,15 +799,188 @@ export class CasesService {
       : 0;
     return {
       ...safeRow,
+      activityJob: steward ? hostJob : row.activityJob,
+      businessUnitTitle: steward
+        ? hostCaseFile?.businessUnitTitle ?? row.businessUnitTitle
+        : row.businessUnitTitle,
+      premiseCity: steward
+        ? hostCaseFile?.premiseCity ?? row.premiseCity
+        : row.premiseCity,
+      hostLicenseNumber: steward ? hostCaseFile?.licenseNumber ?? null : null,
+      hostLicenseIssuedAt: steward
+        ? dateOnly(hostCaseFile?.licenseIssuedAt ?? null)
+        : null,
+      hostLicenseExpiresAt: steward
+        ? dateOnly(hostCaseFile?.licenseExpiresAt ?? null)
+        : null,
+      host:
+        steward && hostCaseFile
+          ? {
+              id: hostCaseFile.id,
+              licenseNumber: hostCaseFile.licenseNumber,
+              businessUnitTitle: hostCaseFile.businessUnitTitle,
+              firstName: hostCaseFile.user.firstName,
+              lastName: hostCaseFile.user.lastName,
+              fullName: hostCaseFile.user.fullName,
+              phone: hostCaseFile.user.phone,
+              jobGroupTitle: hostCaseFile.activityJob?.group?.title ?? null,
+              jobTitle: hostCaseFile.activityJob?.title ?? null,
+              jobTypeTitle: hostCaseFile.activityJob?.jobType?.title ?? null,
+            }
+          : null,
+      requests: requests.map(({ _count: counts, ...request }) => ({
+        ...request,
+        canCancel:
+          request.status === CaseRequestStatus.OPEN &&
+          request.formationStep < requestInquiryStep(request.type) &&
+          counts.inquiries === 0 &&
+          counts.payments === 0,
+      })),
+      cardNumber: row.cardNumber,
+      cardIssuedAt: dateOnly(row.cardIssuedAt),
+      cardExpiresAt: dateOnly(row.cardExpiresAt),
+      ownerName: owner.fullName,
+      ownerFirstName: owner.firstName,
+      ownerLastName: owner.lastName,
+      ownerPhone: owner.phone,
+      ownerNationalId: owner.nationalId,
       violationCount,
       suspensionCount: _count.suspensions,
+      suspensions: suspensions.map((item) => ({
+        id: item.id,
+        reason: item.reason,
+        startsAt: dateOnly(item.startsAt),
+        endsAt: dateOnly(item.endsAt),
+        liftNote: item.liftNote,
+        active: suspensionIsActive(item),
+        files: item.files,
+      })),
       futureActions: {
-        renewal: { enabled: false },
-        auction: { enabled: false },
-        stewardship: { enabled: false },
-        locationChange: { enabled: false },
+        renewal: {
+          enabled:
+            row.kind === CaseFileKind.LICENSE &&
+            row.status !== CaseFileStatus.REVOKED &&
+            (Boolean(row.licenseNumber) ||
+              row.requests.some((request) => request.type === CaseRequestType.RENEWAL)),
+        },
+        auction: {
+          enabled:
+            row.kind === CaseFileKind.LICENSE &&
+            Boolean(row.licenseNumber) &&
+            row.status !== CaseFileStatus.REVOKED &&
+            row.status !== CaseFileStatus.EXPIRED &&
+            !row.requests.some(
+              (request) =>
+                request.status === CaseRequestStatus.OPEN && request.type !== CaseRequestType.AUCTION,
+            ),
+        },
+        stewardship: {
+          enabled: portalStewardshipActionEnabled({
+            kind: row.kind,
+            status: row.status,
+            licenseNumber: row.licenseNumber,
+            suspensions,
+          }),
+        },
+        locationChange: {
+          enabled:
+            row.kind === CaseFileKind.LICENSE &&
+            Boolean(row.licenseNumber) &&
+            row.status !== CaseFileStatus.REVOKED &&
+            row.status !== CaseFileStatus.EXPIRED &&
+            !row.requests.some(
+              (request) =>
+                request.status === CaseRequestStatus.OPEN &&
+                request.type !== CaseRequestType.LOCATION_CHANGE,
+            ),
+        },
       },
     };
+  }
+
+  async violations(userId: string, caseId: string) {
+    const owner = await this.ownedIdentity(userId, caseId);
+    if (!owner.user.nationalId) return [];
+    const items = await this.prisma.violation.findMany({
+      where: { nationalId: owner.user.nationalId },
+      orderBy: [{ occurredAt: 'desc' }, { createdAt: 'desc' }, { id: 'asc' }],
+      select: portalViolationSelect,
+    });
+    return items.map(mapPortalViolation);
+  }
+
+  async violation(userId: string, caseId: string, violationId: string) {
+    const owner = await this.ownedIdentity(userId, caseId);
+    if (!owner.user.nationalId) throw new NotFoundException('تخلف یافت نشد');
+    const item = await this.prisma.violation.findFirst({
+      where: { id: violationId, nationalId: owner.user.nationalId },
+      select: portalViolationSelect,
+    });
+    if (!item) throw new NotFoundException('تخلف یافت نشد');
+    return mapPortalViolation(item);
+  }
+
+  async violationAttachment(
+    userId: string,
+    caseId: string,
+    violationId: string,
+    attachmentId: string,
+  ) {
+    const owner = await this.ownedIdentity(userId, caseId);
+    if (!owner.user.nationalId) throw new NotFoundException('پیوست یافت نشد');
+    const attachment = await this.prisma.violationAttachment.findFirst({
+      where: {
+        id: attachmentId,
+        violationId,
+        violation: { nationalId: owner.user.nationalId },
+      },
+      select: {
+        originalName: true,
+        image: { select: { mimeType: true, data: true, originalName: true } },
+        file: { select: { mimeType: true, data: true, originalName: true } },
+      },
+    });
+    const blob = attachment?.image ?? attachment?.file;
+    if (!attachment || !blob) throw new NotFoundException('پیوست یافت نشد');
+    return {
+      mimeType: blob.mimeType,
+      data: Buffer.from(blob.data),
+      name: attachment.originalName || blob.originalName || 'file',
+    };
+  }
+
+  async suspensionFile(userId: string, caseId: string, fileId: string) {
+    const file = await this.prisma.caseSuspensionFile.findFirst({
+      where: {
+        id: fileId,
+        suspension: { caseFileId: caseId, caseFile: { userId } },
+      },
+      select: {
+        storageKey: true,
+        originalName: true,
+        mimeType: true,
+        byteSize: true,
+      },
+    });
+    if (!file) throw new NotFoundException('پیوست یافت نشد');
+    const absolute = await resolveStoredAbsolute(
+      file.storageKey,
+      this.config.getOrThrow<string>('storage.root'),
+      'پیوست یافت نشد',
+    );
+    return { ...file, absolute };
+  }
+
+  private async ownedIdentity(userId: string, caseId: string) {
+    const row = await this.prisma.caseFile.findFirst({
+      where: { id: caseId, userId },
+      select: {
+        id: true,
+        user: { select: { nationalId: true, fullName: true } },
+      },
+    });
+    if (!row) throw new NotFoundException('پرونده یافت نشد');
+    return row;
   }
 
   async dossier(userId: string, caseId: string) {
@@ -683,6 +1102,20 @@ export class CasesService {
             id: true,
             licenseNumber: true,
             businessUnitTitle: true,
+            previousOccupation: true,
+            posDeviceCount: true,
+            ...dossierPlaceSelect,
+            activityJob: {
+              select: {
+                id: true,
+                title: true,
+                group: { select: { title: true } },
+                jobType: { select: { title: true } },
+              },
+            },
+            premiseCity: { select: { nameFa: true, nameEn: true } },
+            premiseComplex: { select: { name: true, nameEn: true } },
+            registrationPlace: { select: { title: true } },
             user: {
               select: { firstName: true, lastName: true, fullName: true },
             },
@@ -697,7 +1130,7 @@ export class CasesService {
             cardNumber: true,
             cardIssuedAt: true,
             cardExpiresAt: true,
-            user: { select: { fullName: true, nationalId: true } },
+            user: { select: { firstName: true, lastName: true, fullName: true, nationalId: true, phone: true } },
             requests: {
               where: { type: CaseRequestType.STEWARDSHIP },
               orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
@@ -717,6 +1150,9 @@ export class CasesService {
       ...person
     } = file.user;
     const steward = file.kind === CaseFileKind.STEWARDSHIP;
+    const host = file.hostCaseFile;
+    const activitySource = steward && host ? host : file;
+    const locationSource = steward && host ? host : file;
     return {
       id: file.id,
       kind: file.kind,
@@ -729,7 +1165,9 @@ export class CasesService {
       cardNumber: file.cardNumber,
       cardIssuedAt: dateOnly(file.cardIssuedAt),
       cardExpiresAt: dateOnly(file.cardExpiresAt),
-      businessUnitTitle: file.businessUnitTitle,
+      businessUnitTitle: steward
+        ? host?.businessUnitTitle ?? file.businessUnitTitle
+        : file.businessUnitTitle,
       person: {
         ...person,
         birthDate: dateOnly(birthDate),
@@ -737,18 +1175,18 @@ export class CasesService {
         passportExpiresAt: dateOnly(passportExpiresAt),
       },
       activity: {
-        businessUnitTitle: file.businessUnitTitle,
-        jobGroupTitle: file.activityJob?.group?.title ?? null,
-        jobTitle: file.activityJob?.title ?? null,
-        jobTypeTitle: file.activityJob?.jobType?.title ?? null,
-        previousOccupation: file.previousOccupation,
-        posDeviceCount: file.posDeviceCount,
+        businessUnitTitle: activitySource.businessUnitTitle,
+        jobGroupTitle: activitySource.activityJob?.group?.title ?? null,
+        jobTitle: activitySource.activityJob?.title ?? null,
+        jobTypeTitle: activitySource.activityJob?.jobType?.title ?? null,
+        previousOccupation: activitySource.previousOccupation,
+        posDeviceCount: activitySource.posDeviceCount,
       },
       location: {
-        ...mapDossierLocation(file),
-        city: file.premiseCity,
-        complex: file.premiseComplex,
-        registrationPlaceTitle: file.registrationPlace?.title ?? null,
+        ...mapDossierLocation(locationSource),
+        city: locationSource.premiseCity,
+        complex: locationSource.premiseComplex,
+        registrationPlaceTitle: locationSource.registrationPlace?.title ?? null,
       },
       locationHistory: file.premiseHistory.map((row) => ({
         id: row.id,
@@ -812,14 +1250,208 @@ export class CasesService {
         : file.stewardCases.map((row) => ({
             id: row.id,
             status: row.status,
+            firstName: row.user.firstName,
+            lastName: row.user.lastName,
             fullName: row.user.fullName,
             nationalId: row.user.nationalId,
+            phone: row.user.phone,
             requestNumber: row.requests[0]?.number ?? null,
             requestStatus: row.requests[0]?.status ?? null,
             cardNumber: row.cardNumber,
             cardIssuedAt: dateOnly(row.cardIssuedAt),
             cardExpiresAt: dateOnly(row.cardExpiresAt),
           })),
+    };
+  }
+
+  async stewardship(userId: string, caseId: string) {
+    const file = await this.prisma.caseFile.findFirst({
+      where: {
+        id: caseId,
+        kind: CaseFileKind.STEWARDSHIP,
+        OR: [{ userId }, { hostCaseFile: { userId } }],
+      },
+      select: {
+        id: true,
+        userId: true,
+        status: true,
+        cardNumber: true,
+        cardIssuedAt: true,
+        cardExpiresAt: true,
+        revokeReason: true,
+        revokeSource: true,
+        revokeRequestedAt: true,
+        revokedAt: true,
+        revokedBy: {
+          select: { firstName: true, lastName: true, fullName: true },
+        },
+        user: {
+          select: {
+            fullName: true,
+            firstName: true,
+            lastName: true,
+            nationalId: true,
+          },
+        },
+        hostCaseFile: {
+          select: {
+            id: true,
+            licenseNumber: true,
+            businessUnitTitle: true,
+            user: {
+              select: { firstName: true, lastName: true, fullName: true },
+            },
+            activityJob: {
+              select: {
+                title: true,
+                group: { select: { title: true } },
+              },
+            },
+          },
+        },
+      },
+    });
+    if (!file) throw new NotFoundException('پرونده یافت نشد');
+    const revoked = file.status === CaseFileStatus.REVOKED;
+    return {
+      id: file.id,
+      viewerIsHolder: file.userId === userId,
+      status: file.status,
+      cardNumber: file.cardNumber,
+      cardIssuedAt: dateOnly(file.cardIssuedAt),
+      cardExpiresAt: dateOnly(file.cardExpiresAt),
+      revokeReason: revoked ? file.revokeReason : null,
+      revokeSource: revoked ? file.revokeSource : null,
+      revokeRequestedAt: revoked ? (file.revokeRequestedAt?.toISOString() ?? null) : null,
+      revokedAt: revoked ? dateOnly(file.revokedAt) : null,
+      revokedBy:
+        revoked && file.revokedBy
+          ? {
+              firstName: file.revokedBy.firstName,
+              lastName: file.revokedBy.lastName,
+              fullName: file.revokedBy.fullName,
+            }
+          : null,
+      person: file.user,
+      host: file.hostCaseFile
+        ? {
+            id: file.hostCaseFile.id,
+            licenseNumber: file.hostCaseFile.licenseNumber,
+            businessUnitTitle: file.hostCaseFile.businessUnitTitle,
+            firstName: file.hostCaseFile.user.firstName,
+            lastName: file.hostCaseFile.user.lastName,
+            fullName: file.hostCaseFile.user.fullName,
+            jobTitle: file.hostCaseFile.activityJob?.title ?? null,
+            jobGroupTitle: file.hostCaseFile.activityJob?.group?.title ?? null,
+          }
+        : null,
+    };
+  }
+
+  async revokeStewardship(
+    userId: string,
+    caseId: string,
+    dto: RevokePortalStewardshipDto,
+    upload?: UploadFile,
+  ) {
+    const text = dto.reason.trim();
+    if (!text) throw new BadRequestException('متن درخواست را وارد کنید');
+    const revokedAt =
+      (dto.revokedAt ? parseIsoDateOnly(dto.revokedAt) : null) ??
+      parseIsoDateOnly(localTodayIso());
+    if (!revokedAt) throw new BadRequestException('تاریخ ابطال مباشرت معتبر نیست');
+    const file = await this.prisma.caseFile.findFirst({
+      where: {
+        id: caseId,
+        kind: CaseFileKind.STEWARDSHIP,
+        OR: [{ userId }, { hostCaseFile: { userId } }],
+      },
+      select: {
+        id: true,
+        userId: true,
+        status: true,
+        cardNumber: true,
+        requests: {
+          where: { status: CaseRequestStatus.OPEN },
+          select: { id: true },
+        },
+      },
+    });
+    if (!file) throw new NotFoundException('پرونده یافت نشد');
+    if (!file.cardNumber) {
+      throw new BadRequestException('کارت مباشرت هنوز صادر نشده است');
+    }
+    if (file.status === CaseFileStatus.REVOKED) {
+      throw new BadRequestException('این کارت قبلاً ابطال شده است');
+    }
+    if (file.status !== CaseFileStatus.ACTIVE) {
+      throw new BadRequestException('فقط پرونده فعال قابل ابطال است');
+    }
+    const requestedAt = new Date();
+    const revokeSource =
+      file.userId === userId ? CaseRevokeSource.STEWARD : CaseRevokeSource.HOST;
+    let storageKey: string | null = null;
+    try {
+      await this.prisma.$transaction(async (tx) => {
+        await tx.caseFile.update({
+          where: { id: file.id },
+          data: {
+            status: CaseFileStatus.REVOKED,
+            revokeReason: text,
+            revokeSource,
+            revokeRequestedAt: requestedAt,
+            revokedAt,
+            revokedById: userId,
+            reactivatedAt: null,
+          },
+        });
+        if (upload?.buffer?.length) {
+          const fileId = randomUUID();
+          const ext = uploadExtension(upload.mimetype);
+          storageKey = [
+            'persons',
+            file.userId,
+            'cases',
+            file.id,
+            'steward-revoke',
+            `${fileId}${ext}`,
+          ].join('/');
+          const root = path.resolve(this.config.getOrThrow<string>('storage.root'));
+          const absolute = path.resolve(root, storageKey);
+          if (!absolute.startsWith(`${root}${path.sep}`)) {
+            throw new BadRequestException('مسیر فایل معتبر نیست');
+          }
+          await mkdir(path.dirname(absolute), { recursive: true });
+          await writeFile(absolute, upload.buffer);
+          await tx.caseStewardRevokeFile.create({
+            data: {
+              id: fileId,
+              caseFileId: file.id,
+              storageKey,
+              originalName: upload.originalname,
+              mimeType: upload.mimetype,
+              byteSize: upload.size,
+            },
+          });
+        }
+        if (file.requests.length) {
+          await tx.caseRequest.updateMany({
+            where: { id: { in: file.requests.map((row) => row.id) } },
+            data: { status: CaseRequestStatus.CANCELLED },
+          });
+        }
+      });
+    } catch (error) {
+      if (storageKey) {
+        const root = path.resolve(this.config.getOrThrow<string>('storage.root'));
+        await unlink(path.resolve(root, storageKey)).catch(() => undefined);
+      }
+      throw error;
+    }
+    return {
+      id: file.id,
+      status: CaseFileStatus.REVOKED,
+      revokedAt: dateOnly(revokedAt),
     };
   }
 
@@ -851,7 +1483,7 @@ export class CasesService {
             birthDate: true,
             passportNumber: true,
             photoId: true,
-            country: { select: { nameFa: true, nameEn: true } },
+            country: { select: { iso2: true, nameFa: true, nameEn: true } },
           },
         },
         requests: {
@@ -864,6 +1496,16 @@ export class CasesService {
     });
     if (!row) throw new NotFoundException('پرونده یافت نشد');
     const { photoId, ...owner } = row.user;
+    const stamp = row.licenseNumber
+      ? await this.prisma.caseActivityLicenseSettings.findUnique({
+          where: { id: 'default' },
+          select: {
+            signerName: true,
+            signerTitle: true,
+            signature: { select: { mimeType: true, data: true } },
+          },
+        })
+      : null;
     return {
       licenseNumber: row.licenseNumber,
       issuedAt: dateOnly(row.licenseIssuedAt),
@@ -875,6 +1517,7 @@ export class CasesService {
       lastNameEn: owner.lastNameEn,
       gender: owner.gender,
       birthDate: dateOnly(owner.birthDate),
+      nationalityIso2: owner.country?.iso2 ?? null,
       nationalityFa: owner.country?.nameFa ?? null,
       nationalityEn: owner.country?.nameEn ?? null,
       passportNumber: owner.passportNumber,
@@ -883,6 +1526,9 @@ export class CasesService {
       activityTitle: row.activityJob?.title ?? null,
       activityTitleEn: row.activityJob?.titleEn ?? null,
       hasPhoto: Boolean(photoId),
+      signerName: stamp?.signerName ?? null,
+      signerTitle: stamp?.signerTitle ?? null,
+      signatureDataUrl: imageDataUrl(stamp?.signature),
       address: row.premiseAddress,
       addressEn: row.premiseAddressEn,
       plaque: row.premisePlaque,
@@ -1198,6 +1844,56 @@ export class CasesService {
     return { ok: true };
   }
 
+  async cancelRequest(userId: string, caseId: string, requestId: string) {
+    const file = await this.prisma.caseFile.findFirst({
+      where: { id: caseId, userId },
+      select: {
+        id: true,
+        kind: true,
+        licenseNumber: true,
+        cardNumber: true,
+      },
+    });
+    if (!file) throw new NotFoundException('پرونده یافت نشد');
+    const request = await this.prisma.caseRequest.findFirst({
+      where: { id: requestId, caseFileId: file.id },
+      select: {
+        id: true,
+        type: true,
+        status: true,
+        formationStep: true,
+        _count: { select: { inquiries: true, payments: true } },
+      },
+    });
+    if (!request) throw new NotFoundException('درخواست یافت نشد');
+    if (request.status !== CaseRequestStatus.OPEN) {
+      throw new BadRequestException('فقط درخواست باز قابل حذف است');
+    }
+    if (
+      request.formationStep >= requestInquiryStep(request.type) ||
+      request._count.inquiries > 0
+    ) {
+      throw new BadRequestException('پس از ارسال استعلام، حذف درخواست ممکن نیست');
+    }
+    if (request._count.payments > 0) {
+      throw new BadRequestException('برای این درخواست پرداخت ثبت شده و حذف ممکن نیست');
+    }
+    const deletesWholeCase =
+      (request.type === CaseRequestType.ISSUANCE && !file.licenseNumber) ||
+      (request.type === CaseRequestType.STEWARDSHIP && !file.cardNumber);
+    if (deletesWholeCase) {
+      await this.remove(userId, caseId);
+      return { ok: true, deletedCase: true };
+    }
+    const storageKeys = await this.prisma.caseActivityDocumentVersion.findMany({
+      where: { caseActivityDocument: { caseRequestId: request.id } },
+      select: { storageKey: true },
+    });
+    await this.prisma.caseRequest.delete({ where: { id: request.id } });
+    await this.removeStorageKeys(storageKeys.map((item) => item.storageKey));
+    return { ok: true, deletedCase: false };
+  }
+
   private async collectCaseStorageKeys(caseIds: string[]) {
     const [
       activityFiles,
@@ -1243,14 +1939,7 @@ export class CasesService {
   }
 
   private async removeStorageKeys(keys: string[]) {
-    const root = path.resolve(this.config.getOrThrow<string>('storage.root'));
-    await Promise.all(
-      keys.map(async (key) => {
-        const absolute = path.resolve(root, key);
-        if (!absolute.startsWith(`${root}${path.sep}`)) return;
-        await unlink(absolute).catch(() => undefined);
-      }),
-    );
+    await removeStoredKeys(keys, this.config.getOrThrow<string>('storage.root'));
   }
 
   async document(userId: string, versionId: string) {
@@ -1279,10 +1968,10 @@ export class CasesService {
         });
     const file = person ?? activity;
     if (!file) throw new NotFoundException('فایل یافت نشد');
-    const root = path.resolve(this.config.getOrThrow<string>('storage.root'));
-    const absolute = path.resolve(root, file.storageKey);
-    if (!absolute.startsWith(`${root}${path.sep}`))
-      throw new NotFoundException('فایل یافت نشد');
+    const absolute = await resolveStoredAbsolute(
+      file.storageKey,
+      this.config.getOrThrow<string>('storage.root'),
+    );
     return { ...file, absolute };
   }
 
@@ -1298,7 +1987,15 @@ export class CasesService {
 
 @Controller('cases')
 export class CasesController {
-  constructor(private readonly cases: CasesService) {}
+  constructor(
+    private readonly cases: CasesService,
+    private readonly auctions: PortalAuctionService,
+    private readonly renewals: PortalRenewalService,
+    private readonly locations: PortalLocationService,
+    private readonly letters: PortalLettersService,
+    private readonly stewardshipPortal: PortalStewardshipService,
+    private readonly stewardFormation: PortalStewardFormationService,
+  ) {}
 
   @Get('documents/:versionId/file')
   async file(
@@ -1321,6 +2018,399 @@ export class CasesController {
     return this.cases.list(user.id, query);
   }
 
+  @Get(':caseId/violations/:violationId/attachments/:attachmentId')
+  async violationAttachment(
+    @CurrentUser() user: PortalUser,
+    @Param('caseId') caseId: string,
+    @Param('violationId') violationId: string,
+    @Param('attachmentId') attachmentId: string,
+    @Res() response: Response,
+  ) {
+    const file = await this.cases.violationAttachment(
+      user.id,
+      caseId,
+      violationId,
+      attachmentId,
+    );
+    const ascii = file.name.replace(/[^\w.\-]+/g, '_') || 'file';
+    response.setHeader('Content-Type', file.mimeType);
+    response.setHeader('Content-Length', String(file.data.length));
+    response.setHeader(
+      'Content-Disposition',
+      `inline; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(file.name)}`,
+    );
+    response.send(file.data);
+  }
+
+  @Get(':caseId/violations/:violationId')
+  violation(
+    @CurrentUser() user: PortalUser,
+    @Param('caseId') caseId: string,
+    @Param('violationId') violationId: string,
+  ) {
+    return this.cases.violation(user.id, caseId, violationId);
+  }
+
+  @Get(':caseId/violations')
+  violations(@CurrentUser() user: PortalUser, @Param('caseId') caseId: string) {
+    return this.cases.violations(user.id, caseId);
+  }
+
+  @Get(':caseId/suspensions/files/:fileId')
+  async suspensionFile(
+    @CurrentUser() user: PortalUser,
+    @Param('caseId') caseId: string,
+    @Param('fileId') fileId: string,
+    @Res() response: Response,
+  ) {
+    const file = await this.cases.suspensionFile(user.id, caseId, fileId);
+    response.setHeader('Content-Type', file.mimeType);
+    response.setHeader('Content-Length', String(file.byteSize));
+    response.setHeader(
+      'Content-Disposition',
+      `inline; filename*=UTF-8''${encodeURIComponent(file.originalName ?? 'file')}`,
+    );
+    createReadStream(file.absolute).pipe(response);
+  }
+
+  @Get(':caseId/auction/:requestId/inquiries/:inquiryId/letter')
+  auctionInquiryLetter(
+    @CurrentUser() user: PortalUser,
+    @Param('caseId') caseId: string,
+    @Param('requestId') requestId: string,
+    @Param('inquiryId') inquiryId: string,
+  ) {
+    return this.letters.inquiryLetter(user.id, caseId, inquiryId, CaseRequestType.AUCTION, requestId);
+  }
+
+  @Get(':caseId/auction/:requestId/places/letter')
+  auctionPlacesLetter(
+    @CurrentUser() user: PortalUser,
+    @Param('caseId') caseId: string,
+    @Param('requestId') requestId: string,
+  ) {
+    return this.letters.placesLetter(user.id, caseId, CaseRequestType.AUCTION, requestId);
+  }
+
+  @Get(':caseId/auction/:requestId/inquiries/:inquiryId/files/:fileId')
+  async auctionInquiryFile(
+    @CurrentUser() user: PortalUser,
+    @Param('caseId') caseId: string,
+    @Param('requestId') requestId: string,
+    @Param('inquiryId') inquiryId: string,
+    @Param('fileId') fileId: string,
+    @Res() response: Response,
+  ) {
+    const file = await this.auctions.inquiryFile(user.id, caseId, requestId, inquiryId, fileId);
+    this.sendStoredFile(response, file);
+  }
+
+  @Get(':caseId/auction/:requestId/places/files/:fileId')
+  async auctionPlacesFile(
+    @CurrentUser() user: PortalUser,
+    @Param('caseId') caseId: string,
+    @Param('requestId') requestId: string,
+    @Param('fileId') fileId: string,
+    @Res() response: Response,
+  ) {
+    const file = await this.auctions.placesFile(user.id, caseId, requestId, fileId);
+    this.sendStoredFile(response, file);
+  }
+
+  @Get(':caseId/auction/:requestId/management-reviews/:reviewId/files/:fileId')
+  async auctionReviewFile(
+    @CurrentUser() user: PortalUser,
+    @Param('caseId') caseId: string,
+    @Param('requestId') requestId: string,
+    @Param('reviewId') reviewId: string,
+    @Param('fileId') fileId: string,
+    @Res() response: Response,
+  ) {
+    const file = await this.auctions.reviewFile(user.id, caseId, requestId, reviewId, fileId);
+    const ascii = (file.originalName ?? 'file').replace(/[^\w.\-]+/g, '_') || 'file';
+    response.setHeader('Content-Type', file.mimeType || 'application/octet-stream');
+    response.setHeader('Content-Length', String(file.data.length));
+    response.setHeader(
+      'Content-Disposition',
+      `inline; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(file.originalName ?? 'file')}`,
+    );
+    response.send(file.data);
+  }
+
+  @Get(':caseId/auction/:requestId')
+  auction(
+    @CurrentUser() user: PortalUser,
+    @Param('caseId') caseId: string,
+    @Param('requestId') requestId: string,
+  ) {
+    return this.auctions.find(user.id, caseId, requestId);
+  }
+
+  @Post(':caseId/auction')
+  createAuction(
+    @CurrentUser() user: PortalUser,
+    @Param('caseId') caseId: string,
+    @Body() dto: SavePortalAuctionDto,
+  ) {
+    return this.auctions.create(user.id, caseId, dto);
+  }
+
+  @Patch(':caseId/auction/:requestId')
+  updateAuction(
+    @CurrentUser() user: PortalUser,
+    @Param('caseId') caseId: string,
+    @Param('requestId') requestId: string,
+    @Body() dto: SavePortalAuctionDto,
+  ) {
+    return this.auctions.update(user.id, caseId, requestId, dto);
+  }
+
+  @Get(':caseId/renewal/:requestId/inquiries/:inquiryId/letter')
+  renewalInquiryLetter(
+    @CurrentUser() user: PortalUser,
+    @Param('caseId') caseId: string,
+    @Param('requestId') requestId: string,
+    @Param('inquiryId') inquiryId: string,
+  ) {
+    return this.letters.inquiryLetter(user.id, caseId, inquiryId, CaseRequestType.RENEWAL, requestId);
+  }
+
+  @Get(':caseId/renewal/:requestId/places/letter')
+  renewalPlacesLetter(
+    @CurrentUser() user: PortalUser,
+    @Param('caseId') caseId: string,
+    @Param('requestId') requestId: string,
+  ) {
+    return this.letters.placesLetter(user.id, caseId, CaseRequestType.RENEWAL, requestId);
+  }
+
+  @Get(':caseId/renewal/:requestId/inquiries/:inquiryId/files/:fileId')
+  async renewalInquiryFile(
+    @CurrentUser() user: PortalUser,
+    @Param('caseId') caseId: string,
+    @Param('requestId') requestId: string,
+    @Param('inquiryId') inquiryId: string,
+    @Param('fileId') fileId: string,
+    @Res() response: Response,
+  ) {
+    const file = await this.renewals.inquiryFile(
+      user.id,
+      caseId,
+      requestId,
+      inquiryId,
+      fileId,
+    );
+    this.sendStoredFile(response, file);
+  }
+
+  @Get(':caseId/renewal/:requestId/places/files/:fileId')
+  async renewalPlacesFile(
+    @CurrentUser() user: PortalUser,
+    @Param('caseId') caseId: string,
+    @Param('requestId') requestId: string,
+    @Param('fileId') fileId: string,
+    @Res() response: Response,
+  ) {
+    const file = await this.renewals.placesFile(user.id, caseId, requestId, fileId);
+    this.sendStoredFile(response, file);
+  }
+
+  @Get(':caseId/renewal/:requestId/management-reviews/:reviewId/files/:fileId')
+  async renewalReviewFile(
+    @CurrentUser() user: PortalUser,
+    @Param('caseId') caseId: string,
+    @Param('requestId') requestId: string,
+    @Param('reviewId') reviewId: string,
+    @Param('fileId') fileId: string,
+    @Res() response: Response,
+  ) {
+    const file = await this.renewals.managementFile(
+      user.id,
+      caseId,
+      requestId,
+      reviewId,
+      fileId,
+    );
+    this.sendStoredFile(response, file);
+  }
+
+  @Get(':caseId/renewal/:requestId')
+  renewal(
+    @CurrentUser() user: PortalUser,
+    @Param('caseId') caseId: string,
+    @Param('requestId') requestId: string,
+  ) {
+    return this.renewals.find(user.id, caseId, requestId);
+  }
+
+  @Post(':caseId/renewal')
+  createRenewal(@CurrentUser() user: PortalUser, @Param('caseId') caseId: string) {
+    return this.renewals.create(user.id, caseId);
+  }
+
+  @Post(':caseId/renewal/:requestId/continue')
+  continueRenewal(
+    @CurrentUser() user: PortalUser,
+    @Param('caseId') caseId: string,
+    @Param('requestId') requestId: string,
+  ) {
+    return this.renewals.continue(user.id, caseId, requestId);
+  }
+
+  @Post(':caseId/renewal/:requestId/documents')
+  @UseInterceptors(upload)
+  uploadRenewalDocument(
+    @CurrentUser() user: PortalUser,
+    @Param('caseId') caseId: string,
+    @Param('requestId') requestId: string,
+    @Body() dto: UploadPortalRenewalDocumentDto,
+    @UploadedFile() file: UploadFile | undefined,
+  ) {
+    return this.renewals.upload(user.id, caseId, requestId, dto, file);
+  }
+
+  @Get(':caseId/location-change/:requestId/inquiries/:inquiryId/letter')
+  locationInquiryLetter(
+    @CurrentUser() user: PortalUser,
+    @Param('caseId') caseId: string,
+    @Param('requestId') requestId: string,
+    @Param('inquiryId') inquiryId: string,
+  ) {
+    return this.letters.inquiryLetter(
+      user.id,
+      caseId,
+      inquiryId,
+      CaseRequestType.LOCATION_CHANGE,
+      requestId,
+    );
+  }
+
+  @Get(':caseId/location-change/:requestId/places/letter')
+  locationPlacesLetter(
+    @CurrentUser() user: PortalUser,
+    @Param('caseId') caseId: string,
+    @Param('requestId') requestId: string,
+  ) {
+    return this.letters.placesLetter(
+      user.id,
+      caseId,
+      CaseRequestType.LOCATION_CHANGE,
+      requestId,
+    );
+  }
+
+  @Get(':caseId/location-change/:requestId/inquiries/:inquiryId/files/:fileId')
+  async locationInquiryFile(
+    @CurrentUser() user: PortalUser,
+    @Param('caseId') caseId: string,
+    @Param('requestId') requestId: string,
+    @Param('inquiryId') inquiryId: string,
+    @Param('fileId') fileId: string,
+    @Res() response: Response,
+  ) {
+    const file = await this.locations.inquiryFile(
+      user.id,
+      caseId,
+      requestId,
+      inquiryId,
+      fileId,
+    );
+    this.sendStoredFile(response, file);
+  }
+
+  @Get(':caseId/location-change/:requestId/places/files/:fileId')
+  async locationPlacesFile(
+    @CurrentUser() user: PortalUser,
+    @Param('caseId') caseId: string,
+    @Param('requestId') requestId: string,
+    @Param('fileId') fileId: string,
+    @Res() response: Response,
+  ) {
+    const file = await this.locations.placesFile(user.id, caseId, requestId, fileId);
+    this.sendStoredFile(response, file);
+  }
+
+  @Get(':caseId/location-change/:requestId/management-reviews/:reviewId/files/:fileId')
+  async locationReviewFile(
+    @CurrentUser() user: PortalUser,
+    @Param('caseId') caseId: string,
+    @Param('requestId') requestId: string,
+    @Param('reviewId') reviewId: string,
+    @Param('fileId') fileId: string,
+    @Res() response: Response,
+  ) {
+    const file = await this.locations.managementFile(
+      user.id,
+      caseId,
+      requestId,
+      reviewId,
+      fileId,
+    );
+    this.sendStoredFile(response, file);
+  }
+
+  @Get(':caseId/location-change/:requestId')
+  locationChange(
+    @CurrentUser() user: PortalUser,
+    @Param('caseId') caseId: string,
+    @Param('requestId') requestId: string,
+  ) {
+    return this.locations.find(user.id, caseId, requestId);
+  }
+
+  @Post(':caseId/location-change')
+  createLocationChange(@CurrentUser() user: PortalUser, @Param('caseId') caseId: string) {
+    return this.locations.create(user.id, caseId);
+  }
+
+  @Patch(':caseId/location-change/:requestId/location')
+  saveLocationChange(
+    @CurrentUser() user: PortalUser,
+    @Param('caseId') caseId: string,
+    @Param('requestId') requestId: string,
+    @Body() dto: SavePortalLocationDto,
+  ) {
+    return this.locations.saveLocation(user.id, caseId, requestId, dto);
+  }
+
+  @Post(':caseId/location-change/:requestId/continue')
+  continueLocationChange(
+    @CurrentUser() user: PortalUser,
+    @Param('caseId') caseId: string,
+    @Param('requestId') requestId: string,
+  ) {
+    return this.locations.continue(user.id, caseId, requestId);
+  }
+
+  @Post(':caseId/location-change/:requestId/documents')
+  @UseInterceptors(upload)
+  uploadLocationDocument(
+    @CurrentUser() user: PortalUser,
+    @Param('caseId') caseId: string,
+    @Param('requestId') requestId: string,
+    @Body() dto: UploadPortalRenewalDocumentDto,
+    @UploadedFile() file: UploadFile | undefined,
+  ) {
+    return this.locations.upload(user.id, caseId, requestId, dto, file);
+  }
+
+  private sendStoredFile(
+    response: Response,
+    file: {
+      mimeType: string;
+      originalName: string | null;
+      data: Buffer;
+    },
+  ) {
+    response.setHeader('Content-Type', file.mimeType || 'application/octet-stream');
+    response.setHeader('Content-Length', String(file.data.length));
+    response.setHeader(
+      'Content-Disposition',
+      `inline; filename*=UTF-8''${encodeURIComponent(file.originalName ?? 'file')}`,
+    );
+    response.send(file.data);
+  }
+
   @Get(':caseId')
   detail(@CurrentUser() user: PortalUser, @Param('caseId') caseId: string) {
     return this.cases.detail(user.id, caseId);
@@ -1341,6 +2431,182 @@ export class CasesController {
     return this.cases.license(user.id, caseId);
   }
 
+  @Get(':caseId/stewards')
+  stewards(@CurrentUser() user: PortalUser, @Param('caseId') caseId: string) {
+    return this.stewardshipPortal.list(user.id, caseId);
+  }
+
+  @Get(':caseId/stewards/lookup')
+  lookupSteward(
+    @CurrentUser() user: PortalUser,
+    @Param('caseId') caseId: string,
+    @Query() query: CreatePortalStewardDto,
+  ) {
+    return this.stewardshipPortal.lookup(user.id, caseId, query.nationalId);
+  }
+
+  @Post(':caseId/stewards')
+  createSteward(
+    @CurrentUser() user: PortalUser,
+    @Param('caseId') caseId: string,
+    @Body() dto: CreatePortalStewardDto,
+  ) {
+    return this.stewardshipPortal.create(user.id, caseId, dto.nationalId, dto.phone);
+  }
+
+  @Delete(':caseId/stewards/:stewardCaseId')
+  cancelOpenSteward(
+    @CurrentUser() user: PortalUser,
+    @Param('caseId') caseId: string,
+    @Param('stewardCaseId') stewardCaseId: string,
+  ) {
+    return this.stewardshipPortal.cancelOpen(user.id, caseId, stewardCaseId);
+  }
+
+  @Get(':caseId/stewardship')
+  stewardship(@CurrentUser() user: PortalUser, @Param('caseId') caseId: string) {
+    return this.cases.stewardship(user.id, caseId);
+  }
+
+  @Get(':caseId/stewardship/formation')
+  getStewardFormation(@CurrentUser() user: PortalUser, @Param('caseId') caseId: string) {
+    return this.stewardFormation.find(user.id, caseId);
+  }
+
+  @Patch(':caseId/stewardship/formation/identity')
+  stewardFormationIdentity(
+    @CurrentUser() user: PortalUser,
+    @Param('caseId') caseId: string,
+    @Body() dto: SavePortalStewardIdentityDto,
+  ) {
+    return this.stewardFormation.saveIdentity(user.id, caseId, dto);
+  }
+
+  @Post(':caseId/stewardship/formation/documents')
+  @UseInterceptors(upload)
+  stewardFormationDocument(
+    @CurrentUser() user: PortalUser,
+    @Param('caseId') caseId: string,
+    @Body() dto: UploadPortalStewardDocumentDto,
+    @UploadedFile() file: UploadFile | undefined,
+  ) {
+    return this.stewardFormation.upload(user.id, caseId, dto, file);
+  }
+
+  @Delete(':caseId/stewardship/formation/documents/:documentId')
+  stewardFormationRemoveDocument(
+    @CurrentUser() user: PortalUser,
+    @Param('caseId') caseId: string,
+    @Param('documentId') documentId: string,
+  ) {
+    return this.stewardFormation.removeDocument(user.id, caseId, documentId);
+  }
+
+  @Post(':caseId/stewardship/formation/continue')
+  stewardFormationContinue(
+    @CurrentUser() user: PortalUser,
+    @Param('caseId') caseId: string,
+  ) {
+    return this.stewardFormation.continue(user.id, caseId);
+  }
+
+  @Get(':caseId/stewardship/formation/inquiries/:inquiryId/letter')
+  stewardFormationInquiryLetter(
+    @CurrentUser() user: PortalUser,
+    @Param('caseId') caseId: string,
+    @Param('inquiryId') inquiryId: string,
+  ) {
+    return this.stewardFormation.find(user.id, caseId).then((state) =>
+      this.letters.inquiryLetter(
+        user.id,
+        caseId,
+        inquiryId,
+        CaseRequestType.STEWARDSHIP,
+        state.requestId,
+      ),
+    );
+  }
+
+  @Get(':caseId/stewardship/formation/places/letter')
+  stewardFormationPlacesLetter(
+    @CurrentUser() user: PortalUser,
+    @Param('caseId') caseId: string,
+  ) {
+    return this.stewardFormation.find(user.id, caseId).then((state) =>
+      this.letters.placesLetter(
+        user.id,
+        caseId,
+        CaseRequestType.STEWARDSHIP,
+        state.requestId,
+      ),
+    );
+  }
+
+  @Get(':caseId/stewardship/formation/inquiries/:inquiryId/files/:fileId')
+  async stewardFormationInquiryFile(
+    @CurrentUser() user: PortalUser,
+    @Param('caseId') caseId: string,
+    @Param('inquiryId') inquiryId: string,
+    @Param('fileId') fileId: string,
+    @Res() response: Response,
+  ) {
+    const file = await this.stewardFormation.inquiryFile(
+      user.id,
+      caseId,
+      inquiryId,
+      fileId,
+    );
+    this.sendStoredFile(response, file);
+  }
+
+  @Get(':caseId/stewardship/formation/places/files/:fileId')
+  async stewardFormationPlacesFile(
+    @CurrentUser() user: PortalUser,
+    @Param('caseId') caseId: string,
+    @Param('fileId') fileId: string,
+    @Res() response: Response,
+  ) {
+    const file = await this.stewardFormation.placesFile(user.id, caseId, fileId);
+    this.sendStoredFile(response, file);
+  }
+
+  @Get(':caseId/stewardship/formation/management-reviews/:reviewId/files/:fileId')
+  async stewardFormationReviewFile(
+    @CurrentUser() user: PortalUser,
+    @Param('caseId') caseId: string,
+    @Param('reviewId') reviewId: string,
+    @Param('fileId') fileId: string,
+    @Res() response: Response,
+  ) {
+    const file = await this.stewardFormation.managementFile(
+      user.id,
+      caseId,
+      reviewId,
+      fileId,
+    );
+    this.sendStoredFile(response, file);
+  }
+
+  @Post(':caseId/stewardship/revocation')
+  @UseInterceptors(upload)
+  revokeStewardship(
+    @CurrentUser() user: PortalUser,
+    @Param('caseId') caseId: string,
+    @Body() dto: RevokePortalStewardshipDto,
+    @UploadedFile() file: UploadFile | undefined,
+  ) {
+    return this.cases.revokeStewardship(user.id, caseId, dto, file);
+  }
+
+  @Delete(':caseId/requests/:requestId')
+  cancelRequest(
+    @CurrentUser() user: PortalUser,
+    @Param('caseId') caseId: string,
+    @Param('requestId') requestId: string,
+  ) {
+    return this.cases.cancelRequest(user.id, caseId, requestId);
+  }
+
   @Delete(':caseId')
   remove(@CurrentUser() user: PortalUser, @Param('caseId') caseId: string) {
     return this.cases.remove(user.id, caseId);
@@ -1357,8 +2623,17 @@ export class CasesController {
 }
 
 @Module({
+  imports: [SmsModule],
   controllers: [CasesController],
-  providers: [CasesService],
+  providers: [
+    CasesService,
+    PortalAuctionService,
+    PortalRenewalService,
+    PortalLocationService,
+    PortalLettersService,
+    PortalStewardshipService,
+    PortalStewardFormationService,
+  ],
   exports: [CasesService],
 })
 export class CasesModule {}

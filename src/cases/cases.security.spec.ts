@@ -99,4 +99,107 @@ describe('portal case ownership boundaries', () => {
       }),
     );
   });
+
+  it('returns 404 for another owner violations', async () => {
+    const findFirst = jest.fn().mockResolvedValue(null);
+    const findMany = jest.fn();
+    const service = serviceWith({
+      caseFile: { findFirst },
+      violation: { findMany },
+    });
+
+    await expect(service.violations('user-a', 'case-b')).rejects.toBeInstanceOf(
+      NotFoundException,
+    );
+    expect(findMany).not.toHaveBeenCalled();
+  });
+
+  it('returns 404 for another owner violation attachment', async () => {
+    const findFirst = jest.fn().mockResolvedValue(null);
+    const attachmentFindFirst = jest.fn();
+    const service = serviceWith({
+      caseFile: { findFirst },
+      violationAttachment: { findFirst: attachmentFindFirst },
+    });
+
+    await expect(
+      service.violationAttachment('user-a', 'case-b', 'violation-c', 'file-d'),
+    ).rejects.toBeInstanceOf(NotFoundException);
+    expect(attachmentFindFirst).not.toHaveBeenCalled();
+  });
+
+  it('returns 404 for another owner suspension file', async () => {
+    const findFirst = jest.fn().mockResolvedValue(null);
+    const service = serviceWith({ caseSuspensionFile: { findFirst } });
+
+    await expect(
+      service.suspensionFile('user-a', 'case-b', 'file-c'),
+    ).rejects.toBeInstanceOf(NotFoundException);
+    expect(findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          id: 'file-c',
+          suspension: { caseFileId: 'case-b', caseFile: { userId: 'user-a' } },
+        },
+      }),
+    );
+  });
+
+  it('returns 404 before revoking another owner stewardship', async () => {
+    const findFirst = jest.fn().mockResolvedValue(null);
+    const service = serviceWith({ caseFile: { findFirst } });
+
+    await expect(
+      service.revokeStewardship('user-a', 'case-b', { reason: 'قطع همکاری' }),
+    ).rejects.toBeInstanceOf(NotFoundException);
+    expect(findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          id: 'case-b',
+          kind: 'STEWARDSHIP',
+          OR: [{ userId: 'user-a' }, { hostCaseFile: { userId: 'user-a' } }],
+        },
+      }),
+    );
+  });
+
+  it('applies host stewardship revoke immediately and stores the requester', async () => {
+    const update = jest.fn();
+    const service = serviceWith({
+      caseFile: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: 'steward-1',
+          userId: 'steward-user',
+          status: 'ACTIVE',
+          cardNumber: '1405-1',
+          requests: [],
+        }),
+      },
+      $transaction: async (fn: (tx: { caseFile: { update: typeof update } }) => Promise<unknown>) =>
+        fn({ caseFile: { update } }),
+    });
+
+    const result = await service.revokeStewardship('host-user', 'steward-1', {
+      reason: 'قطع همکاری',
+      revokedAt: '2026-10-20',
+    });
+
+    expect(result).toEqual({
+      id: 'steward-1',
+      status: 'REVOKED',
+      revokedAt: '2026-10-20',
+    });
+    expect(update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 'steward-1' },
+        data: expect.objectContaining({
+          status: 'REVOKED',
+          revokeSource: 'HOST',
+          revokedById: 'host-user',
+          revokeReason: 'قطع همکاری',
+        }),
+      }),
+    );
+    expect(update.mock.calls[0][0].data.revokeRequestedAt).toBeInstanceOf(Date);
+  });
 });

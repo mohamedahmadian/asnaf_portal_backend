@@ -13,6 +13,14 @@ export class LookupsService {
     });
   }
 
+  provinces(countryId?: string) {
+    return this.prisma.province.findMany({
+      where: { isActive: true, ...(countryId ? { countryId } : {}) },
+      orderBy: [{ sortOrder: 'asc' }, { nameFa: 'asc' }],
+      select: { id: true, nameFa: true, countryId: true },
+    });
+  }
+
   cities(provinceId?: string) {
     return this.prisma.city.findMany({
       where: { isActive: true, ...(provinceId ? { provinceId } : {}) },
@@ -31,6 +39,13 @@ export class LookupsService {
       where: { isActive: true },
       orderBy: { title: 'asc' },
       select: { id: true, title: true, code: true },
+    });
+  }
+
+  jobTypes() {
+    return this.prisma.jobType.findMany({
+      orderBy: { title: 'asc' },
+      select: { id: true, title: true },
     });
   }
 
@@ -81,6 +96,11 @@ export class LookupsController {
     return this.lookups.countries();
   }
 
+  @Get('provinces')
+  provinces(@Query('countryId') countryId?: string) {
+    return this.lookups.provinces(countryId);
+  }
+
   @Get('cities')
   cities(@Query('provinceId') provinceId?: string) {
     return this.lookups.cities(provinceId);
@@ -89,6 +109,11 @@ export class LookupsController {
   @Get('job-groups')
   jobGroups() {
     return this.lookups.jobGroups();
+  }
+
+  @Get('job-types')
+  jobTypes() {
+    return this.lookups.jobTypes();
   }
 
   @Get('jobs')

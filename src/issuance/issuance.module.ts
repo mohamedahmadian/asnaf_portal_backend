@@ -11,6 +11,7 @@ import {
   Patch,
   Post,
   Query,
+  Res,
   UploadedFile,
   UseInterceptors,
 } from '@nestjs/common';
@@ -31,12 +32,15 @@ import {
   MinLength,
   ValidateIf,
 } from 'class-validator';
+import type { Response } from 'express';
 import { memoryStorage } from 'multer';
 import { mkdir, unlink, writeFile } from 'node:fs/promises';
 import * as path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { CurrentUser, PortalUser } from '../auth/auth.module';
+import { readStoredBytes } from '../storage/stored-file';
 import {
+  CaseFileKind,
   CaseRequestType,
   PremiseEstablishment,
   PremiseGeoPosition,
@@ -46,6 +50,7 @@ import {
   UserGender,
 } from '../generated/prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { PortalLettersService } from '../cases/portal-letters.service';
 
 const upload = FileInterceptor('file', {
   storage: memoryStorage(),
@@ -238,6 +243,7 @@ function dateOnly(value: Date | null) {
 
 const caseSelect = {
   id: true,
+  kind: true,
   formationStep: true,
   trackingCode: true,
   businessUnitTitle: true,
@@ -279,6 +285,101 @@ const caseSelect = {
   premiseOwnerName: true,
 } as const;
 
+const identityUserSelect = {
+  firstName: true,
+  lastName: true,
+  fullName: true,
+  fatherName: true,
+  lastNameEn: true,
+  nationalId: true,
+  gender: true,
+  religion: true,
+  religionOther: true,
+  birthDate: true,
+  birthPlace: true,
+  identityCertificateNo: true,
+  identityIssuedIn: true,
+  country: { select: { id: true, nameFa: true } },
+  residencyStatus: true,
+  passportNumber: true,
+  nationalCardExpiresAt: true,
+  passportExpiresAt: true,
+  phone: true,
+  homePhone: true,
+  email: true,
+  address: true,
+  postalCode: true,
+  educationLevel: true,
+  citizenGroup: true,
+  economicJob: { select: { id: true, title: true } },
+} as const;
+
+const issuanceDocumentSelect = {
+  id: true,
+  documentId: true,
+  document: { select: { title: true, code: true } },
+  versions: {
+    orderBy: { version: 'desc' as const },
+    take: 1,
+    select: {
+      id: true,
+      originalName: true,
+      mimeType: true,
+      byteSize: true,
+      version: true,
+    },
+  },
+} as const;
+
+function emptyIssuanceFile() {
+  return {
+    id: '',
+    kind: CaseFileKind.LICENSE,
+    formationStep: 0,
+    trackingCode: null,
+    businessUnitTitle: null,
+    activityJobId: null,
+    licenseIssuedAt: null,
+    licenseNumber: null,
+    activityJob: null,
+    previousOccupation: null,
+    posDeviceCount: null,
+    premiseCityId: null,
+    premiseEstablishment: null,
+    premiseComplexId: null,
+    premiseAddress: null,
+    premiseAddressEn: null,
+    premisePlaque: null,
+    premisePlaqueSeries: null,
+    premiseFloor: null,
+    premiseUnitNo: null,
+    premisePostalCode: null,
+    premisePhone: null,
+    premiseFax: null,
+    premiseGeoPosition: null,
+    premisePublicAccess: null,
+    registrationPlaceId: null,
+    premiseOwnership: null,
+    premiseDeedNo: null,
+    premiseArea: null,
+    leaseIssuedAt: null,
+    leaseExpiresAt: null,
+    leaseAgency: null,
+    premiseOwnerName: null,
+  };
+}
+
+function emptyIssuanceRequest() {
+  return {
+    id: '',
+    number: '',
+    status: 'OPEN',
+    formationStep: 0,
+    intakeSubmittedAt: null,
+    createdAt: new Date(0),
+  };
+}
+
 @Injectable()
 export class IssuanceService {
   constructor(
@@ -287,38 +388,23 @@ export class IssuanceService {
   ) {}
 
   async start(userId: string) {
-    const existing = await this.prisma.caseFile.findFirst({
-      where: {
-        userId,
-        kind: 'LICENSE',
-        licenseNumber: null,
-        requests: { some: { type: 'ISSUANCE', status: 'OPEN' } },
-      },
-      orderBy: [{ updatedAt: 'desc' }, { id: 'desc' }],
-      select: { id: true },
-    });
+    const existing = await this.findOpenIssuance(userId);
     if (existing) return this.state(userId, existing.id);
+    const created = await this.createOpenIssuance(userId, 0);
+    return this.state(userId, created.id);
+  }
 
-    const sequence = (await this.prisma.caseRequest.count()) + 1;
-    const year = new Date().getUTCFullYear();
-    const trackingCode = `CASE-${year}-${randomUUID().slice(0, 8).toUpperCase()}`;
-    const number = `REQ-${year}-${String(sequence).padStart(7, '0')}`;
-    const created = await this.prisma.caseFile.create({
-      data: {
-        userId,
-        formationStep: 0,
-        trackingCode,
-        requests: {
-          create: {
-            type: 'ISSUANCE',
-            number,
-            status: 'OPEN',
-            formationStep: 0,
-          },
-        },
-      },
-      select: { id: true },
-    });
+  async draft(userId: string) {
+    const existing = await this.findOpenIssuance(userId);
+    if (existing) return this.state(userId, existing.id);
+    return this.previewState(userId);
+  }
+
+  async confirmDraft(userId: string) {
+    const existing = await this.findOpenIssuance(userId);
+    if (existing) return this.confirmIdentity(userId, existing.id);
+    await this.assertIdentityReady(userId);
+    const created = await this.createOpenIssuance(userId, 1);
     return this.state(userId, created.id);
   }
 
@@ -328,73 +414,16 @@ export class IssuanceService {
       await Promise.all([
         this.prisma.user.findUniqueOrThrow({
           where: { id: userId },
-          select: {
-            firstName: true,
-            lastName: true,
-            fullName: true,
-            fatherName: true,
-            lastNameEn: true,
-            nationalId: true,
-            gender: true,
-            religion: true,
-            religionOther: true,
-            birthDate: true,
-            birthPlace: true,
-            identityCertificateNo: true,
-            identityIssuedIn: true,
-            country: { select: { id: true, nameFa: true } },
-            residencyStatus: true,
-            passportNumber: true,
-            nationalCardExpiresAt: true,
-            passportExpiresAt: true,
-            phone: true,
-            homePhone: true,
-            email: true,
-            address: true,
-            postalCode: true,
-            educationLevel: true,
-            citizenGroup: true,
-            economicJob: { select: { id: true, title: true } },
-          },
+          select: identityUserSelect,
         }),
         this.issuanceRequest(caseId),
         this.prisma.personDocument.findMany({
           where: { userId },
-          select: {
-            id: true,
-            documentId: true,
-            document: { select: { title: true, code: true } },
-            versions: {
-              orderBy: { version: 'desc' },
-              take: 1,
-              select: {
-                id: true,
-                originalName: true,
-                mimeType: true,
-                byteSize: true,
-                version: true,
-              },
-            },
-          },
+          select: issuanceDocumentSelect,
         }),
         this.prisma.caseActivityDocument.findMany({
           where: { caseFileId: caseId },
-          select: {
-            id: true,
-            documentId: true,
-            document: { select: { title: true, code: true } },
-            versions: {
-              orderBy: { version: 'desc' },
-              take: 1,
-              select: {
-                id: true,
-                originalName: true,
-                mimeType: true,
-                byteSize: true,
-                version: true,
-              },
-            },
-          },
+          select: issuanceDocumentSelect,
         }),
       ]);
     return {
@@ -402,20 +431,18 @@ export class IssuanceService {
       identity: this.identityView(user),
       request,
       documents: { identity: identityDocuments, activity: activityDocuments },
-      editable: file.formationStep < 3 && request.status === 'OPEN',
-      steps: this.stepModes(file.formationStep),
+      editable:
+        file.formationStep < 3 &&
+        request.status === 'OPEN' &&
+        !request.intakeSubmittedAt,
+      awaitingIntake: Boolean(request.intakeSubmittedAt) && file.formationStep < 3,
+      steps: this.stepModes(file.formationStep, Boolean(request.intakeSubmittedAt)),
     };
   }
 
   async confirmIdentity(userId: string, caseId: string) {
     const file = await this.mutableCase(userId, caseId);
-    const user = await this.prisma.user.findUniqueOrThrow({
-      where: { id: userId },
-      select: { nationalId: true, firstName: true, lastName: true },
-    });
-    if (!user.nationalId?.trim() || !user.firstName.trim() || !user.lastName.trim()) {
-      throw new BadRequestException('اطلاعات هویتی بر اساس کد ملی کامل نیست');
-    }
+    await this.assertIdentityReady(userId);
     if (file.formationStep < 1) {
       const request = await this.issuanceRequest(caseId);
       await this.prisma.$transaction([
@@ -490,6 +517,9 @@ export class IssuanceService {
       select: { id: true },
     });
     if (!job) throw new BadRequestException('شغل معتبر نیست');
+    if (await this.missingRequiredActivityDocuments(userId, caseId, job.id)) {
+      throw new BadRequestException('مدارک الزامی شغل بارگذاری نشده است');
+    }
     const request = await this.issuanceRequest(caseId);
     await this.prisma.$transaction([
       this.prisma.caseFile.update({
@@ -578,8 +608,8 @@ export class IssuanceService {
     return this.state(userId, caseId);
   }
 
-  async requirements(userId: string, caseId: string, jobId?: string) {
-    const file = await this.ownedCase(userId, caseId);
+  async requirements(userId: string, caseId?: string | null, jobId?: string) {
+    const file = caseId ? await this.ownedCase(userId, caseId) : null;
     const requestedJobId = jobId?.trim();
     if (
       requestedJobId &&
@@ -596,7 +626,7 @@ export class IssuanceService {
       });
       if (!job) throw new BadRequestException('شغل معتبر نیست');
     }
-    const activityJobId = requestedJobId || file.activityJobId;
+    const activityJobId = requestedJobId || file?.activityJobId;
     const user = await this.prisma.user.findUniqueOrThrow({
       where: { id: userId },
       select: { gender: true },
@@ -641,11 +671,14 @@ export class IssuanceService {
 
   async upload(
     userId: string,
-    caseId: string,
+    caseId: string | null,
     dto: UploadDocumentDto,
     file: UploadFile | undefined,
   ) {
-    const owned = await this.mutableCase(userId, caseId);
+    const owned = caseId ? await this.mutableCase(userId, caseId) : null;
+    if (!owned && dto.scope !== 'identity') {
+      throw new BadRequestException('ابتدا تب هویت را تکمیل کنید');
+    }
     if (!file?.buffer || file.size <= 0)
       throw new BadRequestException('فایل را انتخاب کنید');
     if (
@@ -660,7 +693,7 @@ export class IssuanceService {
       select: { id: true },
     });
     if (!document) throw new BadRequestException('نوع مدرک معتبر نیست');
-    const request = await this.issuanceRequest(caseId);
+    const request = owned ? await this.issuanceRequest(owned.id) : null;
     const documentId =
       dto.scope === 'identity'
         ? (
@@ -677,13 +710,13 @@ export class IssuanceService {
             await this.prisma.caseActivityDocument.upsert({
               where: {
                 caseRequestId_documentId: {
-                  caseRequestId: request.id,
+                  caseRequestId: request!.id,
                   documentId: dto.documentId,
                 },
               },
               create: {
-                caseFileId: owned.id,
-                caseRequestId: request.id,
+                caseFileId: owned!.id,
+                caseRequestId: request!.id,
                 documentId: dto.documentId,
               },
               update: {},
@@ -710,7 +743,7 @@ export class IssuanceService {
     const storageKey =
       dto.scope === 'identity'
         ? `persons/${userId}/documents/${documentId}/v${version}${extension}`
-        : `persons/${userId}/cases/${caseId}/documents/${documentId}/v${version}${extension}`;
+        : `persons/${userId}/cases/${owned!.id}/documents/${documentId}/v${version}${extension}`;
     const root = path.resolve(this.config.getOrThrow<string>('storage.root'));
     const absolute = path.resolve(root, storageKey);
     if (!absolute.startsWith(`${root}${path.sep}`))
@@ -745,17 +778,20 @@ export class IssuanceService {
       await unlink(absolute).catch(() => undefined);
       throw error;
     }
-    return this.state(userId, caseId);
+    return owned ? this.state(userId, owned.id) : this.previewState(userId);
   }
 
   async removeDocument(
     userId: string,
-    caseId: string,
+    caseId: string | null,
     documentId: string,
     scope: string,
   ) {
-    await this.mutableCase(userId, caseId);
-    const request = await this.issuanceRequest(caseId);
+    if (caseId) await this.mutableCase(userId, caseId);
+    else if (scope !== 'identity') {
+      throw new BadRequestException('ابتدا تب هویت را تکمیل کنید');
+    }
+    const request = caseId ? await this.issuanceRequest(caseId) : null;
     if (scope === 'identity') {
       const row = await this.prisma.personDocument.findFirst({
         where: { userId, documentId },
@@ -765,7 +801,7 @@ export class IssuanceService {
       await this.prisma.personDocument.delete({ where: { id: row.id } });
     } else if (scope === 'activity') {
       const row = await this.prisma.caseActivityDocument.findFirst({
-        where: { caseRequestId: request.id, documentId, caseFile: { userId } },
+        where: { caseRequestId: request!.id, documentId, caseFile: { userId } },
         select: { id: true },
       });
       if (!row) throw new NotFoundException('مدرک یافت نشد');
@@ -811,49 +847,28 @@ export class IssuanceService {
     ) {
       throw new BadRequestException('مدارک الزامی کامل نیست');
     }
-    const centers = await this.prisma.inquiryRequirement.findMany({
-      where: {
-        requestType: 'ISSUANCE',
-        inquiryCenter: { isActive: true },
-        OR: [{ jobId: null }, { jobId: file.activityJobId }],
+    const submittedAt = new Date();
+    await this.prisma.caseRequest.update({
+      where: { id: request.id },
+      data: { intakeSubmittedAt: submittedAt },
+    });
+    const saved = await this.state(userId, caseId);
+    return {
+      ...saved,
+      receipt: {
+        jobTitle: saved.case.activityJob?.title ?? '',
+        jobGroup: saved.case.activityJob?.group?.title ?? '',
+        unitTitle: saved.case.businessUnitTitle ?? '',
+        requestNumber: saved.request.number,
+        submittedAt: submittedAt.toISOString(),
       },
-      distinct: ['inquiryCenterId'],
-      select: { inquiryCenterId: true },
-    });
-    await this.prisma.$transaction(async (tx) => {
-      for (const center of centers) {
-        await tx.caseInquiry.upsert({
-          where: {
-            caseRequestId_inquiryCenterId: {
-              caseRequestId: request.id,
-              inquiryCenterId: center.inquiryCenterId,
-            },
-          },
-          create: {
-            caseFileId: caseId,
-            caseRequestId: request.id,
-            inquiryCenterId: center.inquiryCenterId,
-            referredAt: new Date(),
-          },
-          update: { referredAt: new Date() },
-        });
-      }
-      await tx.caseFile.update({
-        where: { id: caseId },
-        data: { formationStep: 3 },
-      });
-      await tx.caseRequest.update({
-        where: { id: request.id },
-        data: { formationStep: 3 },
-      });
-    });
-    return this.state(userId, caseId);
+    };
   }
 
   async organizationSteps(userId: string, caseId: string) {
     await this.ownedCase(userId, caseId);
     const request = await this.issuanceRequest(caseId);
-    return this.prisma.caseRequest.findFirstOrThrow({
+    const row = await this.prisma.caseRequest.findFirstOrThrow({
       where: { id: request.id, caseFile: { userId } },
       select: {
         id: true,
@@ -861,6 +876,7 @@ export class IssuanceService {
         status: true,
         formationStep: true,
         inquiries: {
+          orderBy: [{ referredAt: 'asc' }, { createdAt: 'asc' }],
           select: {
             id: true,
             status: true,
@@ -868,6 +884,16 @@ export class IssuanceService {
             referredAt: true,
             decidedAt: true,
             inquiryCenter: { select: { name: true } },
+            decidedBy: { select: { fullName: true } },
+            files: {
+              orderBy: { createdAt: 'asc' },
+              select: {
+                id: true,
+                originalName: true,
+                mimeType: true,
+                byteSize: true,
+              },
+            },
           },
         },
         placesReview: {
@@ -877,15 +903,38 @@ export class IssuanceService {
             note: true,
             referredAt: true,
             decidedAt: true,
+            decidedBy: { select: { fullName: true } },
+            files: {
+              orderBy: { createdAt: 'asc' },
+              select: {
+                id: true,
+                originalName: true,
+                mimeType: true,
+                byteSize: true,
+              },
+            },
           },
         },
         managementReviews: {
+          orderBy: { createdAt: 'asc' },
           select: {
             id: true,
             status: true,
             note: true,
+            createdAt: true,
             decidedAt: true,
-            role: { select: { name: true } },
+            decidedBy: { select: { fullName: true } },
+            role: { select: { id: true, name: true } },
+            workUnit: { select: { title: true } },
+            files: {
+              orderBy: { createdAt: 'asc' },
+              select: {
+                id: true,
+                originalName: true,
+                mimeType: true,
+                byteSize: true,
+              },
+            },
           },
         },
         caseFile: {
@@ -897,14 +946,125 @@ export class IssuanceService {
         },
       },
     });
+    const titles = row.managementReviews.length
+      ? await this.prisma.caseProcessManagementRole.findMany({
+          where: {
+            requestType: 'ISSUANCE',
+            roleId: { in: row.managementReviews.map((item) => item.role.id) },
+          },
+          select: { roleId: true, title: true },
+        })
+      : [];
+    return {
+      ...row,
+      managementReviews: row.managementReviews.map((item) => ({
+        id: item.id,
+        status: item.status,
+        referredAt: item.createdAt,
+        decidedAt: item.decidedAt,
+        decidedBy: item.decidedBy,
+        title:
+          titles.find((role) => role.roleId === item.role.id)?.title ??
+          [item.workUnit?.title, item.role.name].filter(Boolean).join(' · '),
+        files: item.files,
+      })),
+    };
   }
 
-  private stepModes(step: number) {
+  async inquiryFile(
+    userId: string,
+    caseId: string,
+    inquiryId: string,
+    fileId: string,
+  ) {
+    const file = await this.prisma.caseInquiryFile.findFirst({
+      where: {
+        id: fileId,
+        caseInquiryId: inquiryId,
+        caseInquiry: {
+          caseFileId: caseId,
+          caseFile: { userId },
+          caseRequest: { type: 'ISSUANCE' },
+        },
+      },
+      select: {
+        storageKey: true,
+        originalName: true,
+        mimeType: true,
+        byteSize: true,
+      },
+    });
+    return this.readableStoredFile(file);
+  }
+
+  async placesFile(userId: string, caseId: string, fileId: string) {
+    const file = await this.prisma.casePlacesFile.findFirst({
+      where: {
+        id: fileId,
+        review: {
+          caseFileId: caseId,
+          caseFile: { userId },
+          caseRequest: { type: 'ISSUANCE' },
+        },
+      },
+      select: {
+        storageKey: true,
+        originalName: true,
+        mimeType: true,
+        byteSize: true,
+      },
+    });
+    return this.readableStoredFile(file);
+  }
+
+  async managementFile(
+    userId: string,
+    caseId: string,
+    reviewId: string,
+    fileId: string,
+  ) {
+    const file = await this.prisma.caseManagementReviewFile.findFirst({
+      where: {
+        id: fileId,
+        reviewId,
+        review: {
+          caseFileId: caseId,
+          caseFile: { userId },
+          caseRequest: { type: 'ISSUANCE' },
+        },
+      },
+      select: {
+        storageKey: true,
+        originalName: true,
+        mimeType: true,
+        byteSize: true,
+      },
+    });
+    return this.readableStoredFile(file);
+  }
+
+  private async readableStoredFile(
+    file: {
+      storageKey: string;
+      originalName: string | null;
+      mimeType: string;
+      byteSize: number;
+    } | null,
+  ) {
+    if (!file) throw new NotFoundException('پیوست یافت نشد');
+    const data = await readStoredBytes(
+      file.storageKey,
+      this.config.getOrThrow<string>('storage.root'),
+    );
+    return { ...file, data };
+  }
+
+  private stepModes(step: number, awaitingIntake = false) {
     return [0, 1, 2, 3, 4, 5, 6].map((index) => ({
       step: index,
       mode:
         index < 3
-          ? step < 3
+          ? step < 3 && !awaitingIntake
             ? 'EDIT'
             : 'LOCKED'
           : index <= step
@@ -913,20 +1073,114 @@ export class IssuanceService {
     }));
   }
 
+  private async missingRequiredActivityDocuments(
+    userId: string,
+    caseId: string,
+    jobId: string,
+  ) {
+    const requirements = await this.requirements(userId, caseId, jobId);
+    const request = await this.issuanceRequest(caseId);
+    const stored = await this.prisma.caseActivityDocument.findMany({
+      where: { caseRequestId: request.id, versions: { some: {} } },
+      select: { documentId: true },
+    });
+    const uploaded = new Set(stored.map((item) => item.documentId));
+    return requirements.activity.some(
+      (item) => item.isRequired && !uploaded.has(item.document.id),
+    );
+  }
+
+  private async findOpenIssuance(userId: string) {
+    return this.prisma.caseFile.findFirst({
+      where: {
+        userId,
+        kind: 'LICENSE',
+        licenseNumber: null,
+        requests: { some: { type: 'ISSUANCE', status: 'OPEN' } },
+      },
+      orderBy: [{ updatedAt: 'desc' }, { id: 'desc' }],
+      select: { id: true },
+    });
+  }
+
+  private async createOpenIssuance(userId: string, formationStep: number) {
+    const sequence = (await this.prisma.caseRequest.count()) + 1;
+    const year = new Date().getUTCFullYear();
+    const trackingCode = `CASE-${year}-${randomUUID().slice(0, 8).toUpperCase()}`;
+    const number = `REQ-${year}-${String(sequence).padStart(7, '0')}`;
+    return this.prisma.caseFile.create({
+      data: {
+        userId,
+        formationStep,
+        trackingCode,
+        requests: {
+          create: {
+            type: 'ISSUANCE',
+            number,
+            status: 'OPEN',
+            formationStep,
+          },
+        },
+      },
+      select: { id: true },
+    });
+  }
+
+  private async assertIdentityReady(userId: string) {
+    const user = await this.prisma.user.findUniqueOrThrow({
+      where: { id: userId },
+      select: { nationalId: true, firstName: true, lastName: true },
+    });
+    if (!user.nationalId?.trim() || !user.firstName.trim() || !user.lastName.trim()) {
+      throw new BadRequestException('اطلاعات هویتی بر اساس کد ملی کامل نیست');
+    }
+  }
+
+  private async previewState(userId: string) {
+    const [user, identityDocuments] = await Promise.all([
+      this.prisma.user.findUniqueOrThrow({
+        where: { id: userId },
+        select: identityUserSelect,
+      }),
+      this.prisma.personDocument.findMany({
+        where: { userId },
+        select: issuanceDocumentSelect,
+      }),
+    ]);
+    return {
+      case: emptyIssuanceFile(),
+      identity: this.identityView(user),
+      request: emptyIssuanceRequest(),
+      documents: { identity: identityDocuments, activity: [] },
+      editable: true,
+      awaitingIntake: false,
+      steps: this.stepModes(0),
+    };
+  }
+
   private async ownedCase(userId: string, caseId: string) {
     const row = await this.prisma.caseFile.findFirst({
-      where: { id: caseId, userId, kind: 'LICENSE' },
+      where: { id: caseId, userId },
       select: caseSelect,
     });
     if (!row) throw new NotFoundException('پرونده یافت نشد');
+    if (row.kind === CaseFileKind.STEWARDSHIP) {
+      throw new BadRequestException(
+        'پرونده مباشرت از مسیر صدور مجوز تکمیل نمی‌شود',
+      );
+    }
     return row;
   }
 
   private async mutableCase(userId: string, caseId: string) {
     const row = await this.ownedCase(userId, caseId);
     const request = await this.issuanceRequest(caseId);
-    if (row.formationStep >= 3 || request.status !== 'OPEN') {
-      throw new BadRequestException('پرونده پس از ثبت نهایی قابل ویرایش نیست');
+    if (
+      row.formationStep >= 3 ||
+      request.status !== 'OPEN' ||
+      request.intakeSubmittedAt
+    ) {
+      throw new BadRequestException('پرونده پس از ثبت اولیه قابل ویرایش نیست');
     }
     return row;
   }
@@ -1008,6 +1262,7 @@ export class IssuanceService {
         number: true,
         status: true,
         formationStep: true,
+        intakeSubmittedAt: true,
         createdAt: true,
       },
     });
@@ -1018,11 +1273,48 @@ export class IssuanceService {
 
 @Controller('issuance')
 export class IssuanceController {
-  constructor(private readonly issuance: IssuanceService) {}
+  constructor(
+    private readonly issuance: IssuanceService,
+    private readonly letters: PortalLettersService,
+  ) {}
 
   @Post()
   start(@CurrentUser() user: PortalUser) {
     return this.issuance.start(user.id);
+  }
+
+  @Get('draft')
+  draft(@CurrentUser() user: PortalUser) {
+    return this.issuance.draft(user.id);
+  }
+
+  @Get('draft/requirements')
+  draftRequirements(@CurrentUser() user: PortalUser, @Query('jobId') jobId?: string) {
+    return this.issuance.requirements(user.id, null, jobId);
+  }
+
+  @Post('draft/documents')
+  @UseInterceptors(upload)
+  draftDocument(
+    @CurrentUser() user: PortalUser,
+    @Body() dto: UploadDocumentDto,
+    @UploadedFile() file: UploadFile | undefined,
+  ) {
+    return this.issuance.upload(user.id, null, dto, file);
+  }
+
+  @Delete('draft/documents/:scope/:documentId')
+  removeDraftDocument(
+    @CurrentUser() user: PortalUser,
+    @Param('scope') scope: string,
+    @Param('documentId') documentId: string,
+  ) {
+    return this.issuance.removeDocument(user.id, null, documentId, scope);
+  }
+
+  @Post('draft/identity/confirm')
+  confirmDraft(@CurrentUser() user: PortalUser) {
+    return this.issuance.confirmDraft(user.id);
   }
 
   @Get(':caseId')
@@ -1107,11 +1399,87 @@ export class IssuanceController {
   ) {
     return this.issuance.organizationSteps(user.id, caseId);
   }
+
+  @Get(':caseId/inquiries/:inquiryId/letter')
+  inquiryLetter(
+    @CurrentUser() user: PortalUser,
+    @Param('caseId') caseId: string,
+    @Param('inquiryId') inquiryId: string,
+  ) {
+    return this.letters.inquiryLetter(user.id, caseId, inquiryId, CaseRequestType.ISSUANCE);
+  }
+
+  @Get(':caseId/places/letter')
+  placesLetter(@CurrentUser() user: PortalUser, @Param('caseId') caseId: string) {
+    return this.letters.placesLetter(user.id, caseId, CaseRequestType.ISSUANCE);
+  }
+
+  @Get(':caseId/inquiries/:inquiryId/files/:fileId')
+  async inquiryFile(
+    @CurrentUser() user: PortalUser,
+    @Param('caseId') caseId: string,
+    @Param('inquiryId') inquiryId: string,
+    @Param('fileId') fileId: string,
+    @Res() response: Response,
+  ) {
+    const file = await this.issuance.inquiryFile(
+      user.id,
+      caseId,
+      inquiryId,
+      fileId,
+    );
+    this.sendStoredFile(response, file);
+  }
+
+  @Get(':caseId/places/files/:fileId')
+  async placesFile(
+    @CurrentUser() user: PortalUser,
+    @Param('caseId') caseId: string,
+    @Param('fileId') fileId: string,
+    @Res() response: Response,
+  ) {
+    const file = await this.issuance.placesFile(user.id, caseId, fileId);
+    this.sendStoredFile(response, file);
+  }
+
+  @Get(':caseId/management-reviews/:reviewId/files/:fileId')
+  async managementFile(
+    @CurrentUser() user: PortalUser,
+    @Param('caseId') caseId: string,
+    @Param('reviewId') reviewId: string,
+    @Param('fileId') fileId: string,
+    @Res() response: Response,
+  ) {
+    const file = await this.issuance.managementFile(
+      user.id,
+      caseId,
+      reviewId,
+      fileId,
+    );
+    this.sendStoredFile(response, file);
+  }
+
+  private sendStoredFile(
+    response: Response,
+    file: {
+      mimeType: string;
+      originalName: string | null;
+      data: Buffer;
+    },
+  ) {
+    response.setHeader('Content-Type', file.mimeType || 'application/octet-stream');
+    response.setHeader('Content-Length', String(file.data.length));
+    response.setHeader(
+      'Content-Disposition',
+      `inline; filename*=UTF-8''${encodeURIComponent(file.originalName ?? 'file')}`,
+    );
+    response.send(file.data);
+  }
 }
 
 @Module({
   controllers: [IssuanceController],
-  providers: [IssuanceService],
+  providers: [IssuanceService, PortalLettersService],
   exports: [IssuanceService],
 })
 export class IssuanceModule {}

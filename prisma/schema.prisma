@@ -178,6 +178,7 @@ model StoredImage {
   violationProceedingAttachments ViolationProceedingAttachment[] @relation("ViolationProceedingAttachmentImage")
   letterheadLogos        CaseLetterhead[] @relation("LetterheadLogo")
   letterheadSignatures   CaseLetterhead[] @relation("LetterheadSignature")
+  activityLicenseSignatures CaseActivityLicenseSettings[] @relation("ActivityLicenseSignature")
   paymentReceipts        PaymentReceipt[] @relation("PaymentReceiptImage")
   createdAt              DateTime @default(now())
 
@@ -761,6 +762,18 @@ model CaseLetterhead {
   @@map("case_letterheads")
 }
 
+/// امضای ثابت مجوز فعالیت اقتصادی؛ یک ردیف
+model CaseActivityLicenseSettings {
+  id          String       @id @default("default")
+  signerName  String?
+  signerTitle String?
+  signatureId String?      @unique
+  signature   StoredImage? @relation("ActivityLicenseSignature", fields: [signatureId], references: [id], onDelete: SetNull)
+  updatedAt   DateTime     @updatedAt
+
+  @@map("case_activity_license_settings")
+}
+
 /// تنظیمات ثابت اداره اماکن؛ یک مسئول برای اعلام نظر روی پرونده‌ها
 model CasePlacesOffice {
   id            String   @id @default("default")
@@ -1215,6 +1228,8 @@ model CaseRequest {
   status        CaseRequestStatus @default(OPEN)
   /// مرحلهٔ همین درخواست. برای صدور همان ۰ تا ۶ است. نوع‌های دیگر مرحلهٔ جدا دارند.
   formationStep Int               @default(0)
+  /// ثبت اولیهٔ متقاضی؛ تا تأیید مدیریت، ارجاع استعلام ساخته نمی‌شود.
+  intakeSubmittedAt DateTime?
   completedAt   DateTime?
   inquiries     CaseInquiry[]
   placesReview  CasePlacesReview?
