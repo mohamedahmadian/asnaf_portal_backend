@@ -285,6 +285,14 @@ model BankAccount {
   @@map("bank_accounts")
 }
 
+enum MunicipalFeeCalcKind {
+  FIXED
+  ANNUAL_MEMBERSHIP
+  AREA_LEVY
+  LATE_MEMBERSHIP
+  LATE_AREA_LEVY
+}
+
 model MunicipalFee {
   id            String            @id @default(uuid())
   title         String            @unique
@@ -295,7 +303,9 @@ model MunicipalFee {
   caseRequestFees   CaseRequestFee[]
   description       String?
   isActive      Boolean           @default(true)
+  /// مبلغ ثابت؛ برای calcKindهای فرمولی استفاده نمی‌شود
   amount        Decimal           @db.Decimal(18, 0)
+  calcKind      MunicipalFeeCalcKind @default(FIXED)
   processTypes  CaseRequestType[] @default([])
   createdAt     DateTime          @default(now())
   updatedAt     DateTime          @updatedAt
@@ -303,6 +313,7 @@ model MunicipalFee {
   @@index([bankAccountId])
   @@index([title])
   @@index([amount])
+  @@index([calcKind])
   @@index([isActive])
   @@index([createdAt])
   @@map("municipal_fees")
@@ -540,12 +551,15 @@ model JobType {
   description String?
   /// عوارض سالیانه؛ برای شغل‌هایی که عوارض جداگانه ندارند در محاسبه استفاده می‌شود
   annualFee   Decimal? @db.Decimal(18, 0)
+  /// تعرفه سالیانه متراژ سازمان؛ برای همه شغل‌های این نوع خدمت
+  annualAreaTariff Decimal? @db.Decimal(18, 0)
   jobs        Job[]
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
   @@index([title])
   @@index([annualFee])
+  @@index([annualAreaTariff])
   @@index([createdAt])
   @@map("job_types")
 }
@@ -1061,6 +1075,8 @@ model CaseFile {
   /// شمارهٔ ثابت مجوز فعالیت اقتصادی؛ با تمام شدن درخواست صدور پر می‌شود
   licenseNumber        String?                @unique
   licenseIssuedAt      DateTime?              @db.Date
+  /// تاریخ اولین صدور مجوز؛ با تمدید عوض نمی‌شود
+  firstIssuedAt        DateTime?              @db.Date
   licenseExpiresAt     DateTime?              @db.Date
   businessUnitTitle    String?
   activityJobId        String?
@@ -1117,6 +1133,7 @@ model CaseFile {
   @@index([premiseComplexId])
   @@index([registrationPlaceId])
   @@index([licenseIssuedAt])
+  @@index([firstIssuedAt])
   @@index([licenseExpiresAt])
   @@index([createdAt])
   @@map("case_files")
@@ -1276,6 +1293,9 @@ model CaseRequestFee {
   municipalFee   MunicipalFee       @relation(fields: [municipalFeeId], references: [id], onDelete: Restrict)
   title          String
   amount         Decimal            @db.Decimal(18, 0)
+  calcKind       MunicipalFeeCalcKind @default(FIXED)
+  /// ورودی‌های محاسبه‌شده هنگام ساخت سطر؛ برای نمایش و رد
+  calcInputs     Json?
   sortOrder      Int                @default(0)
   createdAt      DateTime           @default(now())
 
