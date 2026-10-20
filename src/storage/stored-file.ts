@@ -2,11 +2,8 @@ import { NotFoundException } from '@nestjs/common';
 import { access, readFile, unlink } from 'node:fs/promises';
 import * as path from 'node:path';
 
-function storageRoots(primary: string): string[] {
-  const roots = [path.resolve(primary)];
-  const sibling = path.resolve(process.cwd(), '..', 'backend', 'storage');
-  if (sibling !== roots[0]) roots.push(sibling);
-  return roots;
+function storageRoot(primary: string): string {
+  return path.resolve(primary);
 }
 
 function safeAbsolute(root: string, storageKey: string): string | null {
@@ -16,16 +13,13 @@ function safeAbsolute(root: string, storageKey: string): string | null {
 }
 
 export async function readStoredBytes(storageKey: string, primaryRoot: string) {
-  for (const root of storageRoots(primaryRoot)) {
-    const absolute = safeAbsolute(root, storageKey);
-    if (!absolute) continue;
-    try {
-      return await readFile(absolute);
-    } catch {
-      continue;
-    }
+  const absolute = safeAbsolute(storageRoot(primaryRoot), storageKey);
+  if (!absolute) throw new NotFoundException('پیوست یافت نشد');
+  try {
+    return await readFile(absolute);
+  } catch {
+    throw new NotFoundException('پیوست یافت نشد');
   }
-  throw new NotFoundException('پیوست یافت نشد');
 }
 
 export async function resolveStoredAbsolute(
@@ -33,29 +27,23 @@ export async function resolveStoredAbsolute(
   primaryRoot: string,
   missingMessage = 'فایل یافت نشد',
 ) {
-  for (const root of storageRoots(primaryRoot)) {
-    const absolute = safeAbsolute(root, storageKey);
-    if (!absolute) continue;
-    try {
-      await access(absolute);
-      return absolute;
-    } catch {
-      continue;
-    }
+  const absolute = safeAbsolute(storageRoot(primaryRoot), storageKey);
+  if (!absolute) throw new NotFoundException(missingMessage);
+  try {
+    await access(absolute);
+    return absolute;
+  } catch {
+    throw new NotFoundException(missingMessage);
   }
-  throw new NotFoundException(missingMessage);
 }
 
 export async function removeStoredKeys(keys: string[], primaryRoot: string) {
+  const root = storageRoot(primaryRoot);
   await Promise.all(
     keys.map(async (key) => {
-      await Promise.all(
-        storageRoots(primaryRoot).map(async (root) => {
-          const absolute = safeAbsolute(root, key);
-          if (!absolute) return;
-          await unlink(absolute).catch(() => undefined);
-        }),
-      );
+      const absolute = safeAbsolute(root, key);
+      if (!absolute) return;
+      await unlink(absolute).catch(() => undefined);
     }),
   );
 }
