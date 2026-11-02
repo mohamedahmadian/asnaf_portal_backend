@@ -13,9 +13,10 @@ import {
   Query,
   Res,
   UploadedFile,
+  UploadedFiles,
   UseInterceptors,
 } from '@nestjs/common';
-import { FileInterceptor } from '@nestjs/platform-express';
+import { FileInterceptor, FilesInterceptor } from '@nestjs/platform-express';
 import { memoryStorage } from 'multer';
 import { Transform } from 'class-transformer';
 import { IsIn, IsInt, IsOptional, IsString, Max, Min } from 'class-validator';
@@ -65,8 +66,17 @@ import {
   UploadPortalStewardDocumentDto,
 } from './portal-steward-formation.service';
 import { SavePortalStewardIdentityDto } from './dto/save-portal-steward-identity.dto';
+import {
+  PortalRevocationService,
+  SubmitPortalRevocationDto,
+} from './portal-revocation.service';
 
 const upload = FileInterceptor('file', {
+  storage: memoryStorage(),
+  limits: { fileSize: 8 * 1024 * 1024 },
+});
+
+const uploads = FilesInterceptor('files', 8, {
   storage: memoryStorage(),
   limits: { fileSize: 8 * 1024 * 1024 },
 });
@@ -150,6 +160,25 @@ function uploadExtension(mimeType: string) {
 
 function dateOnly(value: Date | null) {
   return value ? value.toISOString().slice(0, 10) : null;
+}
+
+async function resolveFirstIssuedAt(
+  prisma: PrismaService,
+  caseFileId: string,
+  firstIssuedAt: Date | null,
+  licenseIssuedAt: Date | null,
+) {
+  if (firstIssuedAt) return dateOnly(firstIssuedAt);
+  const firstRenewal = await prisma.caseRequest.findFirst({
+    where: {
+      caseFileId,
+      type: CaseRequestType.RENEWAL,
+      renewalTerms: { isNot: null },
+    },
+    orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+    select: { renewalTerms: { select: { currentIssuedAt: true } } },
+  });
+  return dateOnly(firstRenewal?.renewalTerms?.currentIssuedAt ?? licenseIssuedAt);
 }
 
 function imageDataUrl(image: { mimeType: string; data: Buffer | Uint8Array } | null | undefined) {
@@ -894,6 +923,17 @@ export class CasesService {
                 request.type !== CaseRequestType.LOCATION_CHANGE,
             ),
         },
+        revocation: {
+          enabled:
+            row.kind === CaseFileKind.LICENSE &&
+            Boolean(row.licenseNumber) &&
+            row.status !== CaseFileStatus.REVOKED &&
+            !row.requests.some(
+              (request) =>
+                request.status === CaseRequestStatus.OPEN &&
+                request.type !== CaseRequestType.REVOCATION,
+            ),
+        },
       },
     };
   }
@@ -1459,8 +1499,10 @@ export class CasesService {
     const row = await this.prisma.caseFile.findFirst({
       where: { id: caseId, userId },
       select: {
+        status: true,
         licenseNumber: true,
         licenseIssuedAt: true,
+        firstIssuedAt: true,
         licenseExpiresAt: true,
         trackingCode: true,
         businessUnitTitle: true,
@@ -1506,9 +1548,19 @@ export class CasesService {
           },
         })
       : null;
+    const firstIssuedAt = row.licenseNumber
+      ? await resolveFirstIssuedAt(
+          this.prisma,
+          caseId,
+          row.firstIssuedAt,
+          row.licenseIssuedAt,
+        )
+      : null;
     return {
       licenseNumber: row.licenseNumber,
+      status: row.status,
       issuedAt: dateOnly(row.licenseIssuedAt),
+      firstIssuedAt,
       expiresAt: dateOnly(row.licenseExpiresAt),
       requestNumber: row.requests[0]?.number ?? null,
       trackingCode: row.trackingCode,
@@ -1995,6 +2047,7 @@ export class CasesController {
     private readonly letters: PortalLettersService,
     private readonly stewardshipPortal: PortalStewardshipService,
     private readonly stewardFormation: PortalStewardFormationService,
+    private readonly revocation: PortalRevocationService,
   ) {}
 
   @Get('documents/:versionId/file')
@@ -2011,6 +2064,11 @@ export class CasesController {
       `inline; filename*=UTF-8''${encodeURIComponent(file.originalName ?? 'document')}`,
     );
     createReadStream(file.absolute).pipe(response);
+  }
+
+  @Get('letterhead')
+  letterhead() {
+    return this.letters.brand();
   }
 
   @Get()
@@ -2587,6 +2645,33 @@ export class CasesController {
     this.sendStoredFile(response, file);
   }
 
+  @Get(':caseId/revocation/files/:fileId')
+  async revocationFile(
+    @CurrentUser() user: PortalUser,
+    @Param('caseId') caseId: string,
+    @Param('fileId') fileId: string,
+    @Res() response: Response,
+  ) {
+    const file = await this.revocation.file(user.id, caseId, fileId);
+    this.sendStoredFile(response, file);
+  }
+
+  @Get(':caseId/revocation')
+  revocationState(@CurrentUser() user: PortalUser, @Param('caseId') caseId: string) {
+    return this.revocation.get(user.id, caseId);
+  }
+
+  @Post(':caseId/revocation')
+  @UseInterceptors(uploads)
+  submitRevocation(
+    @CurrentUser() user: PortalUser,
+    @Param('caseId') caseId: string,
+    @Body() dto: SubmitPortalRevocationDto,
+    @UploadedFiles() files: UploadFile[] | undefined,
+  ) {
+    return this.revocation.submit(user.id, caseId, dto, files ?? []);
+  }
+
   @Post(':caseId/stewardship/revocation')
   @UseInterceptors(upload)
   revokeStewardship(
@@ -2633,6 +2718,7 @@ export class CasesController {
     PortalLettersService,
     PortalStewardshipService,
     PortalStewardFormationService,
+    PortalRevocationService,
   ],
   exports: [CasesService],
 })

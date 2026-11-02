@@ -54,6 +54,8 @@ const placeSelect = {
   premiseComplexId: true,
   premiseAddress: true,
   premiseAddressEn: true,
+  urbanZoneId: true,
+  urbanZone: { select: { title: true } },
   premisePlaque: true,
   premisePlaqueSeries: true,
   premiseFloor: true,
@@ -127,6 +129,8 @@ function mapPlace(row: PlaceRow | null) {
     complexId: row.premiseComplexId,
     address: row.premiseAddress,
     addressEn: row.premiseAddressEn,
+    urbanZoneId: row.urbanZoneId,
+    urbanZoneTitle: row.urbanZone?.title ?? null,
     plaque: row.premisePlaque,
     plaqueSeries: row.premisePlaqueSeries,
     floor: row.premiseFloor,
@@ -179,12 +183,19 @@ async function resolveDocumentRequirements(
     select: {
       gender: true,
       isRequired: true,
-      document: { select: { id: true, code: true, title: true } },
+      document: { select: { id: true, code: true, title: true, description: true, link: true } },
     },
   });
   const byId = new Map<
     string,
-    { id: string; code: string | null; title: string; isRequired: boolean }
+    {
+      id: string;
+      code: string | null;
+      title: string;
+      description: string | null;
+      link: string | null;
+      isRequired: boolean;
+    }
   >();
   for (const row of rows) {
     if (row.document.code === PERSONNEL_PHOTO_CODE) continue;
@@ -195,6 +206,8 @@ async function resolveDocumentRequirements(
         id: row.document.id,
         code: row.document.code,
         title: row.document.title,
+        description: row.document.description,
+        link: row.document.link,
         isRequired: row.isRequired,
       });
       continue;
@@ -294,6 +307,13 @@ export class PortalLocationService {
     if (dto.establishment === 'COMMERCIAL_COMPLEX' && !complex) {
       throw new BadRequestException('مجتمع را انتخاب کنید');
     }
+    if (dto.urbanZoneId) {
+      const zone = await this.prisma.urbanZone.findUnique({
+        where: { id: dto.urbanZoneId },
+        select: { id: true },
+      });
+      if (!zone) throw new BadRequestException('محدوده شهری معتبر نیست');
+    }
     const rented = dto.ownership === 'RENTED';
     const digits = (value?: string | null) => value?.replace(/\D/g, '') || null;
     await this.prisma.caseLocationDraft.update({
@@ -304,6 +324,7 @@ export class PortalLocationService {
         premiseComplexId: complex,
         premiseAddress: dto.address?.trim() || null,
         premiseAddressEn: dto.addressEn?.trim() || null,
+        urbanZoneId: dto.urbanZoneId ?? null,
         premisePlaque: dto.plaque?.trim() || null,
         premisePlaqueSeries: dto.plaqueSeries?.trim() || null,
         premiseFloor: dto.floor?.trim() || null,
@@ -390,26 +411,15 @@ export class PortalLocationService {
     if (!requirements.some((row) => row.id === dto.documentId)) {
       throw new BadRequestException('نوع مدرک معتبر نیست');
     }
-    const document = await this.prisma.caseActivityDocument.upsert({
-      where: {
-        caseRequestId_documentId: {
-          caseRequestId: request.id,
-          documentId: dto.documentId,
-        },
-      },
-      create: {
+    const document = await this.prisma.caseActivityDocument.create({
+      data: {
         caseFileId: caseId,
         caseRequestId: request.id,
         documentId: dto.documentId,
       },
-      update: {},
       select: { id: true },
     });
-    const version =
-      1 +
-      (await this.prisma.caseActivityDocumentVersion.count({
-        where: { caseActivityDocumentId: document.id },
-      }));
+    const version = 1;
     const extension =
       file.mimetype === 'application/pdf'
         ? '.pdf'
@@ -538,6 +548,7 @@ export class PortalLocationService {
     const stored = await this.prisma.caseActivityDocument.findMany({
       where: { caseRequestId: request.id },
       select: {
+        id: true,
         documentId: true,
         versions: {
           orderBy: { version: 'desc' },
@@ -595,6 +606,7 @@ export class PortalLocationService {
       currentLocation: mapPlace(request.caseFile),
       requirements,
       documents: stored.map((row) => ({
+        id: row.id,
         documentId: row.documentId,
         current: row.versions[0] ?? null,
       })),

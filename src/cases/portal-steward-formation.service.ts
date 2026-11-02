@@ -207,19 +207,11 @@ export class PortalStewardFormationService {
     if (!requirements.some((row) => row.id === dto.documentId)) {
       throw new BadRequestException('نوع مدرک معتبر نیست');
     }
-    const document = await this.prisma.personDocument.upsert({
-      where: {
-        userId_documentId: { userId, documentId: dto.documentId },
-      },
-      create: { userId, documentId: dto.documentId },
-      update: {},
+    const document = await this.prisma.personDocument.create({
+      data: { userId, documentId: dto.documentId },
       select: { id: true },
     });
-    const version =
-      1 +
-      (await this.prisma.personDocumentVersion.count({
-        where: { personDocumentId: document.id },
-      }));
+    const version = 1;
     const extension =
       file.mimetype === 'application/pdf'
         ? '.pdf'
@@ -257,7 +249,7 @@ export class PortalStewardFormationService {
   async removeDocument(userId: string, caseId: string, documentId: string) {
     await this.assertEditable(userId, caseId);
     const row = await this.prisma.personDocument.findFirst({
-      where: { userId, documentId },
+      where: { id: documentId, userId },
       select: { id: true },
     });
     if (!row) throw new NotFoundException('مدرک یافت نشد');
@@ -403,6 +395,7 @@ export class PortalStewardFormationService {
     const stored = await this.prisma.personDocument.findMany({
       where: { userId },
       select: {
+        id: true,
         documentId: true,
         versions: {
           orderBy: { version: 'desc' },
@@ -494,6 +487,7 @@ export class PortalStewardFormationService {
       },
       requirements,
       documents: stored.map((row) => ({
+        id: row.id,
         documentId: row.documentId,
         current: row.versions[0] ?? null,
       })),
@@ -539,13 +533,20 @@ export class PortalStewardFormationService {
       select: {
         gender: true,
         isRequired: true,
-        document: { select: { id: true, code: true, title: true } },
+        document: { select: { id: true, code: true, title: true, description: true, link: true } },
       },
       orderBy: { document: { title: 'asc' } },
     });
     const byId = new Map<
       string,
-      { id: string; code: string | null; title: string; isRequired: boolean }
+      {
+        id: string;
+        code: string | null;
+        title: string;
+        description: string | null;
+        link: string | null;
+        isRequired: boolean;
+      }
     >();
     for (const row of rows) {
       if (!matchesDocumentGender(row.gender, personGender)) continue;
@@ -555,6 +556,8 @@ export class PortalStewardFormationService {
           id: row.document.id,
           code: row.document.code,
           title: row.document.title,
+          description: row.document.description,
+          link: row.document.link,
           isRequired: row.isRequired,
         });
         continue;

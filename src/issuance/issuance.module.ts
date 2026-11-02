@@ -317,7 +317,7 @@ const identityUserSelect = {
 const issuanceDocumentSelect = {
   id: true,
   documentId: true,
-  document: { select: { title: true, code: true } },
+  document: { select: { title: true, code: true, description: true, link: true } },
   versions: {
     orderBy: { version: 'desc' as const },
     take: 1,
@@ -640,7 +640,7 @@ export class IssuanceService {
       },
       select: {
         isRequired: true,
-        document: { select: { id: true, code: true, title: true } },
+        document: { select: { id: true, code: true, title: true, description: true, link: true } },
       },
       orderBy: { document: { title: 'asc' } },
     });
@@ -662,7 +662,7 @@ export class IssuanceService {
       },
       select: {
         isRequired: true,
-        document: { select: { id: true, code: true, title: true } },
+        document: { select: { id: true, code: true, title: true, description: true, link: true } },
       },
       orderBy: { document: { title: 'asc' } },
     });
@@ -697,41 +697,22 @@ export class IssuanceService {
     const documentId =
       dto.scope === 'identity'
         ? (
-            await this.prisma.personDocument.upsert({
-              where: {
-                userId_documentId: { userId, documentId: dto.documentId },
-              },
-              create: { userId, documentId: dto.documentId },
-              update: {},
+            await this.prisma.personDocument.create({
+              data: { userId, documentId: dto.documentId },
               select: { id: true },
             })
           ).id
         : (
-            await this.prisma.caseActivityDocument.upsert({
-              where: {
-                caseRequestId_documentId: {
-                  caseRequestId: request!.id,
-                  documentId: dto.documentId,
-                },
-              },
-              create: {
+            await this.prisma.caseActivityDocument.create({
+              data: {
                 caseFileId: owned!.id,
                 caseRequestId: request!.id,
                 documentId: dto.documentId,
               },
-              update: {},
               select: { id: true },
             })
           ).id;
-    const version =
-      1 +
-      (dto.scope === 'identity'
-        ? await this.prisma.personDocumentVersion.count({
-            where: { personDocumentId: documentId },
-          })
-        : await this.prisma.caseActivityDocumentVersion.count({
-            where: { caseActivityDocumentId: documentId },
-          }));
+    const version = 1;
     const extension =
       file.mimetype === 'application/pdf'
         ? '.pdf'
@@ -794,14 +775,18 @@ export class IssuanceService {
     const request = caseId ? await this.issuanceRequest(caseId) : null;
     if (scope === 'identity') {
       const row = await this.prisma.personDocument.findFirst({
-        where: { userId, documentId },
+        where: { id: documentId, userId },
         select: { id: true },
       });
       if (!row) throw new NotFoundException('مدرک یافت نشد');
       await this.prisma.personDocument.delete({ where: { id: row.id } });
     } else if (scope === 'activity') {
       const row = await this.prisma.caseActivityDocument.findFirst({
-        where: { caseRequestId: request!.id, documentId, caseFile: { userId } },
+        where: {
+          id: documentId,
+          caseRequestId: request!.id,
+          caseFile: { userId },
+        },
         select: { id: true },
       });
       if (!row) throw new NotFoundException('مدرک یافت نشد');

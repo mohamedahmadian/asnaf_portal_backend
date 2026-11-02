@@ -159,12 +159,19 @@ async function resolveDocumentRequirements(
     select: {
       gender: true,
       isRequired: true,
-      document: { select: { id: true, code: true, title: true } },
+      document: { select: { id: true, code: true, title: true, description: true, link: true } },
     },
   });
   const byId = new Map<
     string,
-    { id: string; code: string | null; title: string; isRequired: boolean }
+    {
+      id: string;
+      code: string | null;
+      title: string;
+      description: string | null;
+      link: string | null;
+      isRequired: boolean;
+    }
   >();
   for (const row of rows) {
     if (row.document.code === PERSONNEL_PHOTO_CODE) continue;
@@ -175,6 +182,8 @@ async function resolveDocumentRequirements(
         id: row.document.id,
         code: row.document.code,
         title: row.document.title,
+        description: row.document.description,
+        link: row.document.link,
         isRequired: row.isRequired,
       });
       continue;
@@ -313,26 +322,15 @@ export class PortalRenewalService {
     if (!requirements.some((row) => row.id === dto.documentId)) {
       throw new BadRequestException('نوع مدرک معتبر نیست');
     }
-    const document = await this.prisma.caseActivityDocument.upsert({
-      where: {
-        caseRequestId_documentId: {
-          caseRequestId: request.id,
-          documentId: dto.documentId,
-        },
-      },
-      create: {
+    const document = await this.prisma.caseActivityDocument.create({
+      data: {
         caseFileId: caseId,
         caseRequestId: request.id,
         documentId: dto.documentId,
       },
-      update: {},
       select: { id: true },
     });
-    const version =
-      1 +
-      (await this.prisma.caseActivityDocumentVersion.count({
-        where: { caseActivityDocumentId: document.id },
-      }));
+    const version = 1;
     const extension =
       file.mimetype === 'application/pdf'
         ? '.pdf'
@@ -466,6 +464,7 @@ export class PortalRenewalService {
     const stored = await this.prisma.caseActivityDocument.findMany({
       where: { caseRequestId: request.id },
       select: {
+        id: true,
         documentId: true,
         versions: {
           orderBy: { version: 'desc' },
@@ -530,6 +529,7 @@ export class PortalRenewalService {
         : null,
       requirements,
       documents: stored.map((row) => ({
+        id: row.id,
         documentId: row.documentId,
         current: row.versions[0] ?? null,
       })),

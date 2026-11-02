@@ -79,6 +79,14 @@ export class LookupsService {
     });
   }
 
+  urbanZones() {
+    return this.prisma.urbanZone.findMany({
+      where: { isActive: true },
+      orderBy: { title: 'asc' },
+      select: { id: true, title: true },
+    });
+  }
+
   documents() {
     return this.prisma.document.findMany({
       orderBy: { title: 'asc' },
@@ -129,6 +137,11 @@ export class LookupsController {
   @Get('registration-places')
   registrationPlaces() {
     return this.lookups.registrationPlaces();
+  }
+
+  @Get('urban-zones')
+  urbanZones() {
+    return this.lookups.urbanZones();
   }
 
   @Get('documents')

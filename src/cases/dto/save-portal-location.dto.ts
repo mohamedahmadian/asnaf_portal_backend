@@ -107,6 +107,12 @@ export class SavePortalLocationDto {
   @IsOptional()
   @Transform(({ value }) => emptyToNull(value))
   @ValidateIf((_, value) => value != null)
+  @IsUUID('4')
+  urbanZoneId?: string | null;
+
+  @IsOptional()
+  @Transform(({ value }) => emptyToNull(value))
+  @ValidateIf((_, value) => value != null)
   @IsIn(premiseGeoPositions)
   geoPosition?: (typeof premiseGeoPositions)[number] | null;
 

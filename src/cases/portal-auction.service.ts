@@ -368,6 +368,7 @@ export class PortalAuctionService {
                 userId: true,
                 businessUnitTitle: true,
                 licenseNumber: true,
+                licenseIssuedAt: true,
                 activityJob: { select: { title: true } },
                 user: { select: { firstName: true, lastName: true, fullName: true } },
               },
@@ -621,6 +622,9 @@ export class PortalAuctionService {
       caseFile: {
         businessUnitTitle: auction.request.caseFile.businessUnitTitle,
         licenseNumber: auction.request.caseFile.licenseNumber,
+        licenseIssuedAt: auction.request.caseFile.licenseIssuedAt
+          ? dateOnly(auction.request.caseFile.licenseIssuedAt)
+          : null,
         jobTitle: auction.request.caseFile.activityJob?.title ?? null,
         person: {
           firstName: person.firstName ?? '',

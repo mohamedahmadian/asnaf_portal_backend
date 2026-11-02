@@ -205,6 +205,10 @@ export class PortalLettersService {
     };
   }
 
+  brand() {
+    return this.forLetter();
+  }
+
   private async forLetter() {
     const row = await this.prisma.caseLetterhead.findUnique({
       where: { id: SETTINGS_ID },

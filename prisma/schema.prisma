@@ -895,10 +895,12 @@ model JobDocument {
 }
 
 model Document {
-  id         String          @id @default(uuid())
-  title      String          @unique
+  id          String          @id @default(uuid())
+  title       String          @unique
+  description String?
+  link        String?
   /// کد پایدار مدرک سیستمی؛ اگر پر باشد حذف و تغییر کد ممنوع است
-  code       String?         @unique
+  code        String?         @unique
   jobs       JobDocument[]
   requirements DocumentRequirement[]
   personDocuments PersonDocument[]
@@ -1014,6 +1016,7 @@ enum CaseRequestType {
   LOCATION_CHANGE
   STEWARDSHIP
   AUCTION
+  REVOCATION
 }
 
 enum CaseRequestStatus {
@@ -1090,6 +1093,8 @@ model CaseFile {
   premiseComplex       CommercialComplex?     @relation("CasePremiseComplex", fields: [premiseComplexId], references: [id], onDelete: SetNull)
   premiseAddress       String?
   premiseAddressEn     String?
+  urbanZoneId          String?
+  urbanZone            UrbanZone?             @relation("CaseUrbanZone", fields: [urbanZoneId], references: [id], onDelete: SetNull)
   premisePlaque        String?
   premisePlaqueSeries  String?
   premiseFloor         String?
@@ -1131,6 +1136,7 @@ model CaseFile {
   @@index([activityJobId])
   @@index([premiseCityId])
   @@index([premiseComplexId])
+  @@index([urbanZoneId])
   @@index([registrationPlaceId])
   @@index([licenseIssuedAt])
   @@index([firstIssuedAt])
@@ -1155,17 +1161,39 @@ model CaseStewardRevokeFile {
 
 /// فرایند سه‌مرحله‌ای ابطال مجوز اقتصادی
 model CaseRevocationProcess {
-  id               String                 @id @default(uuid())
-  caseFileId       String                 @unique
-  caseFile         CaseFile               @relation(fields: [caseFileId], references: [id], onDelete: Cascade)
-  amount           Decimal                @db.Decimal(18, 0)
-  revocationDate   DateTime?              @db.Date
+  id               String                     @id @default(uuid())
+  caseFileId       String                     @unique
+  caseFile         CaseFile                   @relation(fields: [caseFileId], references: [id], onDelete: Cascade)
+  requestId        String?                    @unique
+  request          CaseRequest?               @relation(fields: [requestId], references: [id], onDelete: SetNull)
+  amount           Decimal                    @db.Decimal(18, 0)
+  revocationDate   DateTime?                  @db.Date
   letters          CaseRevocationLetter[]
-  createdAt        DateTime               @default(now())
-  updatedAt        DateTime               @updatedAt
+  files            CaseRevocationProcessFile[]
+  createdAt        DateTime                   @default(now())
+  updatedAt        DateTime                   @updatedAt
 
   @@index([createdAt])
   @@map("case_revocation_processes")
+}
+
+/// پیوست فرایند مدیریتی ابطال. خود فایل در File Storage است.
+model CaseRevocationProcessFile {
+  id           String                @id @default(uuid())
+  processId    String
+  process      CaseRevocationProcess @relation(fields: [processId], references: [id], onDelete: Cascade)
+  storageKey   String
+  originalName String?
+  mimeType     String
+  byteSize     Int
+  uploadedById String?
+  uploadedBy   User?                 @relation("CaseRevocationProcessFileUploader", fields: [uploadedById], references: [id], onDelete: SetNull)
+  createdAt    DateTime              @default(now())
+
+  @@index([processId])
+  @@index([uploadedById])
+  @@index([storageKey])
+  @@map("case_revocation_process_files")
 }
 
 /// نسخهٔ ثابت نامهٔ هر سازمان برای یک فرایند ابطال
@@ -1257,6 +1285,8 @@ model CaseRequest {
   locationDraft CaseLocationDraft?
   replacedPremise CasePremiseHistory?
   auction       CaseAuction?
+  revocation    CaseRevocationRequest?
+  revocationProcess CaseRevocationProcess?
   payments      Payment[]
   finance       CaseRequestFinance?
   createdAt     DateTime          @default(now())
@@ -1268,6 +1298,34 @@ model CaseRequest {
   @@index([formationStep])
   @@index([createdAt])
   @@map("case_requests")
+}
+
+/// درخواست ابطال مجوز از پورتال متقاضی
+model CaseRevocationRequest {
+  requestId String                     @id
+  request   CaseRequest                @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  reason    String
+  files     CaseRevocationRequestFile[]
+  createdAt DateTime                   @default(now())
+  updatedAt DateTime                   @updatedAt
+
+  @@map("case_revocation_requests")
+}
+
+/// پیوست درخواست ابطال متقاضی. خود فایل در File Storage است.
+model CaseRevocationRequestFile {
+  id           String                @id @default(uuid())
+  requestId    String
+  request      CaseRevocationRequest @relation(fields: [requestId], references: [requestId], onDelete: Cascade)
+  storageKey   String
+  originalName String?
+  mimeType     String
+  byteSize     Int
+  createdAt    DateTime              @default(now())
+
+  @@index([requestId])
+  @@index([storageKey])
+  @@map("case_revocation_request_files")
 }
 
 /// حساب و هزینه‌های همین درخواست. با اولین باز شدن از تنظیمات مالی همان نوع درخواست پر می‌شود.
@@ -1347,6 +1405,8 @@ model CaseLocationDraft {
   premiseComplex       CommercialComplex?     @relation("LocationDraftComplex", fields: [premiseComplexId], references: [id], onDelete: SetNull)
   premiseAddress       String?
   premiseAddressEn     String?
+  urbanZoneId          String?
+  urbanZone            UrbanZone?             @relation("LocationDraftUrbanZone", fields: [urbanZoneId], references: [id], onDelete: SetNull)
   premisePlaque        String?
   premisePlaqueSeries  String?
   premiseFloor         String?
@@ -1369,6 +1429,7 @@ model CaseLocationDraft {
 
   @@index([premiseCityId])
   @@index([premiseComplexId])
+  @@index([urbanZoneId])
   @@index([registrationPlaceId])
   @@map("case_location_drafts")
 }
@@ -1389,6 +1450,8 @@ model CasePremiseHistory {
   premiseComplex       CommercialComplex?     @relation("PremiseHistoryComplex", fields: [premiseComplexId], references: [id], onDelete: SetNull)
   premiseAddress       String?
   premiseAddressEn     String?
+  urbanZoneId          String?
+  urbanZone            UrbanZone?             @relation("PremiseHistoryUrbanZone", fields: [urbanZoneId], references: [id], onDelete: SetNull)
   premisePlaque        String?
   premisePlaqueSeries  String?
   premiseFloor         String?
@@ -1411,6 +1474,7 @@ model CasePremiseHistory {
   @@index([caseFileId, endedAt])
   @@index([premiseCityId])
   @@index([premiseComplexId])
+  @@index([urbanZoneId])
   @@index([registrationPlaceId])
   @@map("case_premise_history")
 }
@@ -1519,7 +1583,6 @@ model PersonDocument {
   createdAt  DateTime                @default(now())
   updatedAt  DateTime                @updatedAt
 
-  @@unique([userId, documentId])
   @@index([userId])
   @@index([documentId])
   @@map("person_documents")
@@ -1557,7 +1620,6 @@ model CaseActivityDocument {
   createdAt     DateTime                       @default(now())
   updatedAt     DateTime                       @updatedAt
 
-  @@unique([caseRequestId, documentId])
   @@index([caseFileId])
   @@index([caseRequestId])
   @@index([documentId])
@@ -1667,6 +1729,7 @@ model User {
   caseManagementDecided CaseManagementReview[] @relation("CaseManagementDecider")
   caseAuctionDecided CaseAuctionApproval[] @relation("CaseAuctionDecider")
   caseManagementReviewFiles CaseManagementReviewFile[] @relation("CaseManagementFileUploader")
+  caseRevocationProcessFiles CaseRevocationProcessFile[] @relation("CaseRevocationProcessFileUploader")
   jobGroupRepresentations JobGroupRepresentative[]
   foodReservations   FoodReservation[]
   vehicleAssignments VehicleAssignment[] @relation("VehicleAssignmentPerson")
@@ -2721,6 +2784,23 @@ model StaffPost {
   @@index([isActive])
   @@index([createdAt])
   @@map("staff_posts")
+}
+
+model UrbanZone {
+  id          String   @id @default(uuid())
+  title       String   @unique
+  description String?
+  isActive    Boolean  @default(true)
+  caseFiles   CaseFile[] @relation("CaseUrbanZone")
+  locationDrafts CaseLocationDraft[] @relation("LocationDraftUrbanZone")
+  premiseHistories CasePremiseHistory[] @relation("PremiseHistoryUrbanZone")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([title])
+  @@index([isActive])
+  @@index([createdAt])
+  @@map("urban_zones")
 }
 
 model ViolationType {
